@@ -84,8 +84,10 @@ python thermal_detect.py --device 1 --delta 4.0 --note "2-person walkthrough"
 | `s` | save frame — raw `.npy` (temperatures) + `.png` preview |
 | `l` | toggle logging to CSV |
 | `[` `]` | lower / raise threshold (°C above ambient) |
-| `a` | re-estimate ambient now |
-| `r` | toggle color view ↔ binary mask (useful for tuning) |
+| **`v`** | **cycle mounting mode** (vertical → horizontal → any) |
+| **`1` `2` `3`** | **jump to** vertical / horizontal / any |
+| `a` | print current background and threshold |
+| `r` | cycle display: colour → mask → blended (useful for tuning) |
 
 ## How the detection works
 
@@ -94,29 +96,57 @@ python thermal_detect.py --device 1 --delta 4.0 --note "2-person walkthrough"
    changes, which makes any fixed threshold meaningless.)
 2. **Ambient estimate** — median pixel; people are a minority of the frame, so
    the median tracks room temperature.
-3. **Temperature band** — `ambient + delta < T < tmax` (default 38 °C).
-   The *upper* bound is what rejects equipment: laptops ~40 °C, lamps ~50 °C,
-   radiators ~60 °C. Because clutter is removed by temperature, the minimum
-   blob area can be small (6 px), which is what gives range on small, distant
-   targets.
+3. **Temperature band** — a pixel must be both warmer than the room *and*
+   physiologically plausible: `T > ambient + delta` **and** `27 ≤ T ≤ 36 °C`.
+
+   | Source | Typical °C | In band? |
+   |---|---|---|
+   | Exposed skin (face, hands) | 30 – 35 | ✅ |
+   | Clothed torso / limbs | 27 – 32 | ✅ |
+   | Sun-warmed surface | ~26 | ❌ below |
+   | Laptop | ~41 | ❌ above |
+   | Lamp | ~52 | ❌ above |
+   | Radiator | ~60 | ❌ above |
+
+   Because clutter is rejected by *temperature*, the minimum blob area can be
+   small (6 px) — that is what gives range on distant targets. Tune with
+   `--tmin` / `--tmax`.
+
+   **Warm rooms:** if `ambient + delta` rises above `tmax`, the band would
+   collapse and produce zero detections silently. The relative threshold is
+   therefore capped at `tmax − 2`. Contrast genuinely degrades in a warm room
+   (a clothed body may sit only 2 °C above ambient), so also lower `--delta`
+   there — the band, not the delta, is what keeps clutter out.
 4. **Morphology** — open (despeckle) then close (fill gaps).
 5. **Watershed split** — two people standing close merge into one connected
    component, and no filter can undo that; the blob must be cut. A distance
    transform gives each body a peak with a valley between, and watershed cuts
    along the valley. This is the shape-domain analogue of the head-peak /
    shoulder-valley separation the depth sensor performs.
-6. **Shape gate** — view-dependent, because the geometry differs completely:
+6. **Mounting mode** — the two geometries need different rules, and they are
+   switchable live (later: selected automatically from the IMU).
 
-   | `--view` | aspect (h/w) | extent | rationale |
-   |---|---|---|---|
-   | `overhead` | 0.45 – 2.2 | ≥ 0.35 | head + shoulders from above: roughly round |
-   | `horizontal` | 1.1 – 6.0 | ≥ 0.25 | standing body: tall ellipse |
-   | `any` | 0.30 – 7.0 | ≥ 0.20 | permissive default |
+   | mode | key | aspect (h/w) | extent | person looks like |
+   |---|---|---|---|---|
+   | `vertical` (ceiling, looking down) | `1` | 0.45 – 2.2 | ≥ 0.35 | head + shoulders: roughly round |
+   | `horizontal` (wall, looking forward) | `2` | 1.1 – 6.0 | ≥ 0.25 | standing body: tall ellipse |
+   | `any` (mount unknown) | `3` | 0.30 – 7.0 | ≥ 0.20 | permissive fallback |
 
-7. **Fragment merge** — a body split by cool clothing rejoins. The split/merge
-   conflict is resolved by the axis of separation: two people stand **side by
-   side**, whereas head/torso/legs stack **vertically**. A mainly-horizontal
-   split stays split; a mainly-vertical one is merged back.
+   Press `v` to cycle, or `1`/`2`/`3` to jump. The active mode is shown in the
+   overlay and recorded in the CSV, so logged runs stay interpretable.
+
+7. **Fragment merge** — a body broken up by cool clothing must rejoin, but two
+   adjacent people must not. The rule differs by mode, and this is the crux:
+
+   - **horizontal**: two people are separated **side by side**; head/torso/legs
+     stack **vertically**. So a horizontal split stays split, a vertical one
+     merges back.
+   - **vertical**: seen in plan view, two people can be separated along *any*
+     image direction, so the axis carries no information. The physical limit is
+     used instead — two bodies cannot be closer than shoulder width, so splits
+     whose centres are nearer than `--min-sep` px (default 20) merge back.
+     Tune this to your mount height: it is the pixel distance corresponding to
+     roughly 40 cm on the floor.
 
 Every detection is explainable: a temperature, a shape, and a geometry rule.
 No weights, no training, no per-site calibration.
@@ -124,16 +154,34 @@ No weights, no training, no per-site calibration.
 ### Choosing settings
 
 ```bash
-./run.sh thermal_detect.py --view overhead                  # ceiling mount
-./run.sh thermal_detect.py --view horizontal --min-area 4   # wall mount, long range
-./run.sh thermal_detect.py --tmax 45                        # allow warmer targets
-./run.sh thermal_detect.py --no-split                       # disable watershed
+./run.sh thermal_detect.py --view vertical
+./run.sh thermal_detect.py --view horizontal --min-area 4
+./run.sh thermal_detect.py --view vertical --min-sep 28
+./run.sh thermal_detect.py --tmax 45
+./run.sh thermal_detect.py --no-split
 ```
+
+Modes can also be switched live with `v` / `1` / `2` / `3`, so a single run can
+cover both mounting tests.
 
 Longer range comes from lowering `--min-area`; the `--tmax` band is what keeps
 that safe. If distant people are still missed, lower the detection threshold
 too (`[` / `]` live, or `--delta 2.5`) — at range, atmospheric attenuation and
 pixel mixing reduce apparent contrast.
+
+### Measured settings (bench-tested)
+
+| Scenario | Settings | Why |
+|---|---|---|
+| **Vertical, single occupant** | `--view vertical --cohesion 4` | Max fragmentation resistance. The usual penalty of high cohesion — merging two adjacent people — cannot occur with one occupant, so it is free here. **Measured best on the bench.** |
+| Vertical, multiple occupants | `--view vertical --cohesion 2` | Hard limit: at cohesion ≥3 two people standing close merge into one detection. |
+| Horizontal, any occupancy | `--view horizontal --cohesion 1` | Vertical-stack merging already handles head/torso/legs; extra cohesion is not needed. |
+| Long range | `--min-area 4 --delta 2.5` | Distant targets are few pixels and lower contrast. |
+
+**Cohesion is not monotonic.** A larger CLOSE kernel changes blob topology,
+which changes where watershed cuts, so raising cohesion can occasionally *add*
+a detection. Tune by watching the mask view (`r`), not by assuming higher is
+always calmer.
 
 ## Known limits (these are the fusion arguments, not bugs)
 

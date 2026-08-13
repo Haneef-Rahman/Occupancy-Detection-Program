@@ -45,23 +45,140 @@ LEPTON_W, LEPTON_H = 160, 120
 DEFAULT_DELTA_C = 4.0      # radiometric: °C above ambient
 DEFAULT_PCTL = 96.0        # AGC: percentile of brightness treated as "hot"
 
-# Human surface temperature ceiling. Skin peaks ~36 C; clothed body lower.
-# Anything hotter is equipment: laptops ~40, lamps ~50, radiators ~60+.
-# This upper bound is what lets the area filter be loosened safely.
-DEFAULT_TMAX_C = 38.0
+# Human surface temperature band (absolute, °C).
+#
+#   Exposed skin (face, hands) ....... 30-35
+#   Clothed torso / limbs ............ 27-32
+#   Hair, thick clothing ............. 26-29
+#   ---- band edges chosen just outside those ----
+#   Equipment that must be excluded: laptop ~40, lamp ~50, radiator ~60+
+#
+# The band is applied IN ADDITION to the relative (ambient + delta) threshold,
+# so a pixel must be both warmer than the room AND physiologically plausible.
+# The relative test alone fails in cold rooms (clutter passes) and warm rooms
+# (bodies barely exceed ambient); the absolute band fixes both ends.
+DEFAULT_TMIN_C = 27.0
+DEFAULT_TMAX_C = 36.0
+
+# Exposed-skin priority band. 33-35 C is the temperature of a face, neck or
+# hand — the most specific human signature in the whole scene. Almost nothing
+# in a room sits there: equipment runs hotter, furnishings cooler. So a blob
+# containing genuine skin pixels is treated as a person even when the generic
+# filters (shape envelope, peak count) would have rejected it. This buys back
+# the false negatives those filters cost — partly-occluded people, odd poses,
+# distant targets — without loosening anything for non-skin blobs.
+# The priority band is DERIVED FROM AMBIENT, not fixed.
+#
+# A body surface sits between core temperature and the room, at a position set
+# by how well that surface is insulated:
+#
+#     T_surface = ambient + coupling * (T_CORE - ambient)
+#
+#   coupling ~0.70-0.90  exposed skin (face, hands) — well coupled to core
+#   coupling ~0.45-0.62  thin clothing
+#   coupling ~0.28-0.50  HAIR / scalp — an insulator, much nearer ambient
+#
+# This matters most for the overhead view, where the camera sees the TOP OF
+# THE HEAD — hair, not skin. A fixed 33-35 C band implicitly assumes a face is
+# visible and misses hair entirely, especially in a cool room.
+#
+# Sanity check at ambient 24 C: skin -> 33.1-35.7 C, which reproduces the
+# 33-35 placeholder. The model agrees with the fixed band where the fixed band
+# was valid, and adapts where it was not.
+T_CORE_C = 37.0
+COUPLING = {
+    "skin":     (0.70, 0.90),
+    "clothing": (0.45, 0.62),
+    "hair":     (0.28, 0.50),
+}
+SKIN_EPS_C = 0.05
+SKIN_MIN_FRAC = 0.04      # 4% of blob pixels in-band = a real patch
+SKIN_MIN_PX = 3           # ...and at least this many, so noise cannot qualify
+
+# Set per frame from the measured ambient; overridden by --skin-lo/--skin-hi.
+SKIN_BAND_C = (33.0, 35.0)
+SKIN_BAND_FIXED = False
+
+
+def surface_band(ambient_c, kind="skin", core_c=T_CORE_C):
+    """Temperature range a given body surface should occupy in this room."""
+    lo_c, hi_c = COUPLING[kind]
+    return (ambient_c + lo_c * (core_c - ambient_c),
+            ambient_c + hi_c * (core_c - ambient_c))
 
 MIN_BLOB_AREA = 6          # lowered: a person at range is only a few px
 MAX_BLOB_AREA = 14000
+
+# Bodies are never box-shaped. A filled rectangle has extent 1.0, a perfect
+# ellipse 0.785; real people sit at 0.4-0.75. Anything above this is a
+# manufactured object (laptop, monitor, panel heater) regardless of its
+# temperature or peak count.
+MAX_EXTENT = 0.82
+
+# Same idea but rotation-invariant, measured against the minimum-area rect.
+# This is the one that actually catches a laptop lying at an angle.
+MAX_RECT_FILL = 0.86
 DISPLAY_SCALE = 5
 LOG_DIR = "logs"
 
-# Shape envelopes differ completely by mounting geometry.
-#   overhead   : head+shoulders seen from above -> roughly round
-#   horizontal : standing body -> tall ellipse
+# Two mounting geometries, switchable live with the 'v' key (and later
+# selectable automatically from the IMU's gravity vector).
+#
+#   VERTICAL   camera axis points down (ceiling / overhead mount).
+#              A person is head+shoulders from above: roughly round.
+#              Two people may be separated along ANY image direction,
+#              because they stand on a floor plane seen in plan view —
+#              so a split blob is never re-merged.
+#
+#   HORIZONTAL camera axis points forward (wall / lintel mount).
+#              A person is a standing body: tall ellipse.
+#              Two people separate side-by-side only; a vertical split is
+#              head/torso/legs of ONE body and must be merged back.
+#
+# 'any' is a permissive fallback used before the mount is known.
+VIEW_MODES = ["vertical", "horizontal", "any"]
+
+# min_sep_px: two people cannot stand closer than about shoulder width, so a
+# split producing centres nearer than this is one body that fragmented, not
+# two people. Geometry-dependent — at a 2.4 m ceiling this is roughly 20 px;
+# tune with --min-sep once the real mount height is known.
 SHAPE_RULES = {
-    "overhead":   dict(aspect_min=0.45, aspect_max=2.2, extent_min=0.35),
-    "horizontal": dict(aspect_min=1.1,  aspect_max=6.0, extent_min=0.25),
-    "any":        dict(aspect_min=0.30, aspect_max=7.0, extent_min=0.20),
+    # aspect = height/width of the blob;  extent = blob area / bbox area
+    # cluster_small / small_area: overhead, one body appears as several small
+    # patches (head, shoulders, arms) sitting close together, while clutter sits
+    # alone. Clustered small blobs become one person; isolated ones are dropped.
+    # vertical: delta 4.0 and a mandatory 2-peak test at ALL blob sizes —
+    # overhead, even a distant person shows head + shoulder warm centres, so
+    # a single-peak blob is a hot object rather than a body.
+    "vertical":   dict(aspect_min=0.45, aspect_max=2.2, extent_min=0.35,
+                       merge_axis="any",       # any direction, but only if close
+                       min_sep_px=26,
+                       # reach far enough to gather torso/clothing patches onto
+                       # the body they belong to before anything is discarded
+                       cluster_small=True, small_area=55, cluster_radius=22,
+                       # the 2-peak test applies only to blobs large enough to
+                       # HAVE two centres; a cool clothing patch legitimately
+                       # has one, and demanding two deleted real people
+                       # an overhead head is a smooth dome — it cannot show as many
+                       # warm centres as a whole body, so the bar is lower here.
+                       # The laptop is rejected by MAX_EXTENT, not by peaks.
+                       delta=4.0, min_peaks=2, peak_check_area=200,
+                       surface="hair",       # overhead you see the scalp
+                       label="VERT (down)"),
+    "horizontal": dict(aspect_min=1.1,  aspect_max=6.0, extent_min=0.25,
+                       merge_axis="vertical",  # stacked = one body
+                       min_sep_px=0,
+                       cluster_small=False, small_area=0, cluster_radius=0,
+                       delta=4.0, min_peaks=3, peak_check_area=150,
+                       surface="skin",       # forward you see faces/hands
+                       label="HORIZ (fwd)"),
+    "any":        dict(aspect_min=0.30, aspect_max=7.0, extent_min=0.20,
+                       merge_axis="vertical",
+                       min_sep_px=0,
+                       cluster_small=False, small_area=0, cluster_radius=0,
+                       delta=4.0, min_peaks=3, peak_check_area=150,
+                       surface="skin",
+                       label="ANY"),
 }
 
 
@@ -163,7 +280,7 @@ def compute_threshold(data, is_temp, sensitivity):
     return max(pctl_thr, floor_thr), bg
 
 
-def merge_nearby(dets, gap_px):
+def merge_nearby(dets, gap_px, merge_axis="vertical", min_sep_px=0):
     """
     Fragments of one body (arm, shoulder, head separated by cooler clothing)
     arrive as separate components. Merge detections whose bounding boxes are
@@ -184,7 +301,15 @@ def merge_nearby(dets, gap_px):
         if pa is not None and pa == pb:
             dxc = abs(a["centroid"][0] - b["centroid"][0])
             dyc = abs(a["centroid"][1] - b["centroid"][1])
-            if dxc > dyc:
+            if merge_axis == "any":
+                # VERTICAL (overhead): people separate in any image direction,
+                # so the axis carries no information. Use the physical limit
+                # instead — two bodies cannot be closer than shoulder width.
+                if (dxc ** 2 + dyc ** 2) ** 0.5 >= min_sep_px:
+                    return False        # far enough apart: genuinely two people
+            elif dxc > dyc:
+                # HORIZONTAL: side-by-side means two people; stacked means
+                # head/torso/legs of one, which should merge back.
                 return False
         ax, ay, aw, ah = a["bbox"]
         bx, by, bw, bh = b["bbox"]
@@ -235,12 +360,15 @@ def merge_nearby(dets, gap_px):
             "val_max": max(d["val_max"] for d in g),
             "val_mean": sum(d["val_mean"] * d["area_px"] for d in g) / area,
             "fragments": len(g),
+            "priority": any(d.get("priority") for d in g),
+            "skin_px": sum(d.get("skin_px", 0) for d in g),
+            "skin_frac": sum(d.get("skin_px", 0) for d in g) / area,
         })
     merged.sort(key=lambda d: d["area_px"], reverse=True)
     return merged
 
 
-def split_touching(mask, min_sep=3):
+def split_touching(mask, min_sep=3, neck_ratio=0.72):
     """
     Split blobs formed by two adjacent bodies.
 
@@ -270,6 +398,58 @@ def split_touching(mask, min_sep=3):
         n, labels = cv2.connectedComponents(binary)
         return labels, n - 1
 
+    # Saddle test — decide whether a pair of peaks is really two bodies.
+    #
+    # Two lobes of ONE body (torso + shoulder, head + neck) are joined by a
+    # THICK neck: the distance transform stays high all along the path between
+    # their centres. Two people merely touching are joined by a THIN neck.
+    # So peaks whose connecting path never thins below `neck_ratio` of the
+    # smaller peak are fused into a single seed, and no split occurs there.
+    cents = []
+    for lab in range(1, n_seeds):
+        ys_, xs_ = np.where(seeds == lab)
+        if xs_.size:
+            cents.append((lab, float(xs_.mean()), float(ys_.mean()),
+                          float(dist[ys_, xs_].max())))
+
+    parent = {lab: lab for lab, _, _, _ in cents}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for i in range(len(cents)):
+        for j in range(i + 1, len(cents)):
+            la, xa, ya, pa = cents[i]
+            lb, xb, yb, pb = cents[j]
+            steps = max(2, int(((xa - xb) ** 2 + (ya - yb) ** 2) ** 0.5))
+            saddle = min(
+                float(dist[int(round(ya + (yb - ya) * t / steps)),
+                           int(round(xa + (xb - xa) * t / steps))])
+                for t in range(steps + 1)
+            )
+            if saddle >= neck_ratio * min(pa, pb):
+                ra, rb = find(la), find(lb)
+                if ra != rb:
+                    parent[rb] = ra
+
+    if len(set(find(l) for l, _, _, _ in cents)) <= 1:
+        # every peak belongs to one body: do not split at all
+        n, labels = cv2.connectedComponents(binary)
+        return labels, n - 1
+
+    remap = {}
+    fused = np.zeros_like(seeds)
+    for lab, _, _, _ in cents:
+        root = find(lab)
+        if root not in remap:
+            remap[root] = len(remap) + 1
+        fused[seeds == lab] = remap[root]
+    seeds = fused
+    peaks = (fused > 0).astype(np.uint8)
+
     # Marker convention for cv2.watershed:
     #   0        = unknown, to be filled
     #   1        = background
@@ -296,45 +476,337 @@ def split_touching(mask, min_sep=3):
     return out, idx
 
 
-def shape_ok(w, h, area, rules):
-    """View-dependent shape gate. Returns (passed, aspect, extent)."""
+def thermal_texture(data, ys, xs, prominence=2.5, min_sep=2):
+    """
+    Measure the internal thermal structure of a blob.
+
+    Theory under test: a human is a CLUSTER of several warm regions — face,
+    neck, hands, gaps in clothing — each at a slightly different temperature.
+    A single manufactured hot object (lamp, laptop, radiator, reflection) is
+    one homogeneous patch. So counting distinct local maxima inside a blob
+    should separate bodies from single hot objects.
+
+    Parameters were swept against real captured humans and synthetic objects:
+
+        prominence  min_sep |  human peaks (min/mean) | object peaks (max)
+        ------------------- | ---------------------- | ------------------
+              0.6        2  |        2 / 7.2         |        1
+              1.5        2  |        5 / 11.9        |        1
+              2.5        2  |        5 / 12.5        |        1     <- chosen
+              2.5        1  |        8 / 31.6        |        3
+
+    min_sep=1 yields far more peaks but lets objects reach 3, eroding the
+    margin; min_sep=2 pins objects at exactly 1, so the human/object ratio is
+    the widest and the threshold is unambiguous.
+
+    Returns (n_peaks, std_c, range_c).
+    """
+    if xs.size < 4:
+        return 1, 0.0, 0.0
+
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    patch = np.full((y1 - y0, x1 - x0), -999.0, np.float32)
+    patch[ys - y0, xs - x0] = data[ys, xs]
+
+    vals = data[ys, xs]
+    std_c = float(vals.std())
+    range_c = float(vals.max() - vals.min())
+
+    # Local maxima: a pixel equal to the max of its neighbourhood, and within
+    # `prominence` of the blob's own peak (so we count real warm centres, not
+    # every noise wobble).
+    k = 2 * min_sep + 1
+    dil = cv2.dilate(patch, np.ones((k, k), np.uint8))
+    peak_mask = (patch >= dil - 1e-6) & (patch >= vals.max() - prominence)
+    n_peaks, _ = cv2.connectedComponents(peak_mask.astype(np.uint8))
+    return max(1, n_peaks - 1), std_c, range_c
+
+
+def cluster_small(dets, small_area, radius, min_sep_px=0,
+                  body_min_area=14, body_min_c=29.0):
+    """
+    Handle small blobs by company, not by size alone.
+
+    Seen from above, one person breaks into several small warm patches — head,
+    shoulders, arms — that sit close together. Genuine clutter (a reflection, a
+    warm fitting, sensor speckle) sits alone. So:
+
+      * small blobs near other blobs  -> CLUSTERED into a single detection
+      * small blobs that stay alone   -> DROPPED as isolated heat sources
+
+    Two people are protected by min_sep_px: clusters are never formed across a
+    gap wider than shoulder width.
+    """
+    if not dets:
+        return dets
+
+    n = len(dets)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[rj] = ri
+
+    def sep(a, b):
+        return ((a["centroid"][0] - b["centroid"][0]) ** 2
+                + (a["centroid"][1] - b["centroid"][1]) ** 2) ** 0.5
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = dets[i], dets[j]
+            # Only small blobs are clustered this way; two large bodies that
+            # happen to be near each other stay distinct.
+            if a["area_px"] >= small_area and b["area_px"] >= small_area:
+                continue
+            d = sep(a, b)
+            if d > radius:
+                continue
+            if min_sep_px and d >= min_sep_px:
+                continue          # far enough apart to be two people
+            union(i, j)
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(dets[i])
+
+    out = []
+    for g in groups.values():
+        if len(g) == 1:
+            d = g[0]
+            # Alone and small -> isolated heat source, not a person.
+            #
+            # Two exemptions, both added because this rule was deleting real
+            # people whose torso/clothing reads cool and patchy:
+            #   * skin      — a distant face is small, alone, and real
+            #   * body-warm — a patch sitting solidly in the clothed-body range
+            #                 with a credible size is a person part, not noise.
+            #                 Speckle is tiny AND barely above the floor; this
+            #                 is neither.
+            if d["area_px"] < small_area and not d.get("priority"):
+                body_like = (d["area_px"] >= body_min_area
+                             and d.get("val_mean", 0) >= body_min_c)
+                if not body_like:
+                    continue
+            out.append(d)
+            continue
+
+        x0 = min(d["bbox"][0] for d in g)
+        y0 = min(d["bbox"][1] for d in g)
+        x1 = max(d["bbox"][0] + d["bbox"][2] for d in g)
+        y1 = max(d["bbox"][1] + d["bbox"][3] for d in g)
+        area = sum(d["area_px"] for d in g)
+        out.append({
+            "bbox": (x0, y0, x1 - x0, y1 - y0),
+            "centroid": (sum(d["centroid"][0] * d["area_px"] for d in g) / area,
+                         sum(d["centroid"][1] * d["area_px"] for d in g) / area),
+            "area_px": area,
+            "val_max": max(d["val_max"] for d in g),
+            "val_mean": sum(d["val_mean"] * d["area_px"] for d in g) / area,
+            "aspect": (y1 - y0) / max(1, x1 - x0),
+            "extent": area / max(1, (x1 - x0) * (y1 - y0)),
+            "parent_cc": g[0].get("parent_cc"),
+            "fragments": sum(d.get("fragments", 1) for d in g),
+            "priority": any(d.get("priority") for d in g),
+            "skin_px": sum(d.get("skin_px", 0) for d in g),
+            "skin_frac": sum(d.get("skin_px", 0) for d in g) / area,
+        })
+    return out
+
+
+def rect_fill(region_mask):
+    """
+    How completely a blob fills its MINIMUM-AREA (rotated) rectangle.
+
+    The axis-aligned bounding box is useless for a laptop lying at an angle —
+    a tilted rectangle only half-fills its upright box, so it slips through an
+    extent test. minAreaRect rotates with the object:
+
+        filled rectangle (any angle) -> ~1.00
+        perfect ellipse              -> ~0.785
+        person with limbs/gaps       -> 0.45-0.72
+
+    Returns fill in 0..1 (1.0 if the contour is too small to measure).
+    """
+    m = (region_mask > 0).astype(np.uint8)
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return 1.0
+    c = max(cnts, key=cv2.contourArea)
+    if len(c) < 5 or cv2.contourArea(c) < 12:
+        return 1.0
+    (_, _), (rw, rh), _ = cv2.minAreaRect(c)
+    if rw < 1 or rh < 1:
+        return 1.0
+    return float(cv2.contourArea(c) / (rw * rh))
+
+
+class StaticSuppressor:
+    """
+    Reject things that never move.
+
+    A laptop, monitor or radiator holds the same temperature in the same place
+    indefinitely; a person does not. A slowly-adapting per-pixel background is
+    learned, and pixels matching it are treated as furniture.
+
+    The time constant is deliberately long (~40 s at 9 fps) so that someone
+    standing still for a few seconds is not absorbed. Anyone genuinely
+    stationary for a minute WILL fade — that is the accepted limit of a
+    thermal-only detector, and precisely the gap radar breathing-detection
+    fills in the fused system.
+    """
+
+    def __init__(self, alpha=0.0028, tol_c=0.8):
+        self.bg = None
+        self.alpha = alpha
+        self.tol_c = tol_c
+        self.enabled = True
+        self.frames = 0
+
+    def update(self, data):
+        if self.bg is None:
+            self.bg = data.astype(np.float32).copy()
+        else:
+            self.bg += self.alpha * (data - self.bg)
+        self.frames += 1
+
+    def moving_mask(self, data):
+        """True where the scene differs from its long-term self."""
+        if self.bg is None or not self.enabled or self.frames < 30:
+            return np.ones(data.shape, bool)      # warm-up: trust everything
+        return np.abs(data - self.bg) > self.tol_c
+
+    def reset(self):
+        self.bg = None
+        self.frames = 0
+
+
+def skin_score(vals):
+    """
+    Fraction of a blob's pixels in the exposed-skin band, and whether that is
+    enough to grant priority. Returns (fraction, n_pixels, is_priority).
+    """
+    if vals.size == 0:
+        return 0.0, 0, False
+    lo = SKIN_BAND_C[0] - SKIN_EPS_C      # inclusive of 33.0
+    hi = SKIN_BAND_C[1] + SKIN_EPS_C      # inclusive of 35.0
+    n = int(((vals >= lo) & (vals <= hi)).sum())
+    frac = n / float(vals.size)
+    return frac, n, (n >= SKIN_MIN_PX and frac >= SKIN_MIN_FRAC)
+
+
+def shape_ok(w, h, area, rules, priority=False):
+    """
+    View-dependent shape gate. Returns (passed, aspect, extent).
+
+    A blob carrying exposed-skin temperatures gets a widened envelope: a real
+    person in an awkward pose or partly occluded still reads as skin, and
+    rejecting them on proportions alone would be a false negative we can see
+    is wrong.
+    """
     aspect = h / max(1, w)                       # >1 = taller than wide
     extent = area / max(1, w * h)                # blob fill of its bbox
-    ok = (rules["aspect_min"] <= aspect <= rules["aspect_max"]
-          and extent >= rules["extent_min"])
+    amin, amax = rules["aspect_min"], rules["aspect_max"]
+    emin = rules["extent_min"]
+    if priority:
+        amin, amax, emin = amin * 0.55, amax * 1.8, emin * 0.6
+
+    # Rectangularity ceiling — applies even to priority blobs.
+    #
+    # Manufactured objects are rectangles and fill their bounding box almost
+    # completely (extent -> 1.0). A body never does: a perfect ellipse is
+    # 0.785, and real people with limbs, gaps and soft edges land well below
+    # that. A laptop reading 29-31 C passed the temperature band, the shape
+    # envelope and the peak test; extent is what actually separates it.
+    if extent > MAX_EXTENT:
+        return False, aspect, extent
+
+    ok = (amin <= aspect <= amax and extent >= emin)
     return ok, aspect, extent
 
 
 def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
-                  min_area=MIN_BLOB_AREA, split=True):
+                  min_area=MIN_BLOB_AREA, split=True, min_sep=None,
+                  cohesion=1, tmin=None, min_peaks=None, peak_check_area=None,
+                  body_min_area=14, body_min_c=29.0, moving=None):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
 
-    tmax : upper temperature bound (°C). Rejects equipment, which is what
-           makes a low min_area safe. None disables (AGC mode).
-    view : 'overhead' | 'horizontal' | 'any' — selects the shape envelope.
+    tmax     : upper temperature bound (°C). Rejects equipment, which is what
+               makes a low min_area safe. None disables (AGC mode).
+    view     : 'vertical' | 'horizontal' | 'any' — shape + merge rules.
+    cohesion : anti-fragmentation strength, 0..4. Raising it does three
+               things at once, which are the three ways a body fragments:
+                 1. larger CLOSE kernel  — bridges gaps before labelling
+                 2. larger merge gap     — rejoins separated pieces
+                 3. coarser watershed seeds — fewer spurious splits
+               Adjust live with 'm' / 'n'.
     """
+    cohesion = int(max(0, min(4, cohesion)))
+    # Relative test (warmer than this room) AND absolute band (plausibly human).
+    #
+    # Guard: in a warm room, ambient+delta can rise above tmax and the band
+    # collapses to nothing — zero detections forever, with no visible cause.
+    # Cap the relative threshold so a usable window always remains. Contrast
+    # genuinely degrades in warm rooms, but the failure should be graceful.
+    if tmax is not None and threshold > tmax - 2.0:
+        threshold = tmax - 2.0
+
+    keep = data > threshold
+    if tmin is not None:
+        keep &= data >= tmin
     if tmax is not None:
-        mask = ((data > threshold) & (data < tmax)).astype(np.uint8) * 255
-    else:
-        mask = (data > threshold).astype(np.uint8) * 255
+        keep &= data <= tmax
+    # Drop anything that has not changed in a long time: furniture and
+    # electronics hold still, people do not.
+    if moving is not None:
+        keep &= moving
+    mask = keep.astype(np.uint8) * 255
 
     k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k3)
-    k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k5)
+
+    # Lever 1: the CLOSE kernel bridges cool gaps (clothing, hair) that break a
+    # body into pieces. This runs BEFORE labelling, so it is the most effective
+    # of the three — pieces never become separate components at all.
+    ck = 5 + 2 * cohesion                      # 5, 7, 9, 11, 13
+    kc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ck, ck))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kc)
 
     # Parent connected components, recorded before any splitting, so that
     # merge_nearby can tell "fragments of one body" from "two bodies we cut".
     _, cc_labels = cv2.connectedComponents((mask > 0).astype(np.uint8))
 
     if split:
-        labels, n = split_touching(mask)
+        # Lever 3: coarser seeds mean only substantial cores start a region,
+        # so thin fragments stop generating their own split.
+        labels, n = split_touching(mask, min_sep=3 + cohesion)
     else:
         n_cc, labels = cv2.connectedComponents((mask > 0).astype(np.uint8))
         n = n_cc - 1
 
     rules = SHAPE_RULES.get(view, SHAPE_RULES["any"])
+
+    # Priority band for THIS room, derived from the measured ambient.
+    #
+    # ALWAYS the skin coupling, never hair — even overhead. Hair sits only a
+    # few degrees above ambient (27.6-30.5 C in a 24 C room), which is exactly
+    # where warm electronics live: a MacBook at 29-31 C fell inside the hair
+    # band and was granted priority, bypassing every other filter. Skin is far
+    # above ambient and genuinely rare in a room, so it is the only surface
+    # specific enough to justify overriding the filters. A scalp is still
+    # DETECTED normally; it just does not get a free pass.
+    global SKIN_BAND_C
+    if not SKIN_BAND_FIXED and tmin is not None:
+        ambient_now = float(np.median(data))
+        SKIN_BAND_C = surface_band(ambient_now, "skin")
     dets = []
     for i in range(1, n + 1):
         ys, xs = np.where(labels == i)
@@ -346,12 +818,26 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         x, y = int(xs.min()), int(ys.min())
         w, h = int(xs.max() - x + 1), int(ys.max() - y + 1)
 
-        ok, aspect, extent = shape_ok(w, h, area, rules)
+        blob = data[ys, xs]
+        sfrac, spx, priority = skin_score(blob)
+
+        # Rotation-invariant boxiness: a laptop at ANY angle fills its
+        # minimum-area rectangle. Applies to priority blobs too.
+        sub = np.zeros((h, w), np.uint8)
+        sub[ys - y, xs - x] = 255
+        rfill = rect_fill(sub)
+        if rfill > MAX_RECT_FILL:
+            continue
+
+        ok, aspect, extent = shape_ok(w, h, area, rules, priority)
         if not ok:
             continue
 
-        blob = data[ys, xs]
         dets.append({
+            "skin_frac": float(sfrac),
+            "skin_px": int(spx),
+            "priority": bool(priority),
+            "rect_fill": float(rfill),
             "bbox": (x, y, w, h),
             "centroid": (float(xs.mean()), float(ys.mean())),
             "area_px": area,
@@ -362,8 +848,55 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             "parent_cc": int(cc_labels[ys[0], xs[0]]),
         })
 
-    dets = merge_nearby(dets, merge_gap)
-    dets.sort(key=lambda d: d["area_px"], reverse=True)
+    # Lever 2: a wider gap rejoins pieces that survived as separate components.
+    eff_min_sep = min_sep if min_sep is not None else rules.get("min_sep_px", 0)
+    dets = merge_nearby(dets, merge_gap + 3 * cohesion,
+                        rules.get("merge_axis", "vertical"), eff_min_sep)
+
+    # Cluster surviving small patches into bodies, and discard the ones that
+    # remain alone. Radius grows with cohesion, like the other levers.
+    if rules.get("cluster_small"):
+        dets = cluster_small(dets,
+                             small_area=rules.get("small_area", 40),
+                             radius=rules.get("cluster_radius", 14) + 2 * cohesion,
+                             min_sep_px=eff_min_sep,
+                             body_min_area=body_min_area, body_min_c=body_min_c)
+
+    # Thermal texture is measured on the FINAL body (after merging/clustering),
+    # not on individual fragments, so the peak count reflects the whole person.
+    binm = mask > 0
+    for d in dets:
+        x, y, w, h = d["bbox"]
+        sub = np.zeros_like(binm)
+        sub[y:y + h, x:x + w] = binm[y:y + h, x:x + w]
+        ys_, xs_ = np.where(sub)
+        if xs_.size:
+            npk, sd, rg = thermal_texture(data, ys_, xs_)
+        else:
+            npk, sd, rg = 1, 0.0, 0.0
+        d["peaks"], d["std_c"], d["range_c"] = int(npk), float(sd), float(rg)
+
+    # Single-hot-object rejection.
+    #
+    # Measured on real captures vs synthetic objects:
+    #   humans          peaks 2-10   (face, neck, hands, gaps in clothing)
+    #   uniform objects peaks 1      (lamp, laptop, reflection, hotspot)
+    # Temperature variance does NOT separate them — a gaussian hotspot has
+    # higher std than a real person — so the count of distinct warm centres is
+    # the discriminator, not how varied the blob is.
+    #
+    # Only applied above peak_check_area: a distant person is a few pixels and
+    # legitimately has one peak, so small blobs are exempt.
+    mp = rules.get("min_peaks", min_peaks) if min_peaks is None else min_peaks
+    pca = rules.get("peak_check_area", peak_check_area) if peak_check_area is None \
+        else peak_check_area
+    if mp and mp > 1:
+        # Skin-priority blobs are exempt: a face at 33-35 C is a person even
+        # if it presents as a single warm centre.
+        dets = [d for d in dets
+                if d.get("priority") or d["area_px"] < pca or d["peaks"] >= mp]
+
+    dets.sort(key=lambda d: (d.get("priority", False), d["area_px"]), reverse=True)
     return dets, mask
 
 
@@ -379,20 +912,39 @@ def colorize(data):
     return cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_INFERNO)
 
 
-def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on):
+def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any", cohesion=1,
+                 band_lo=None, band_hi=None):
     unit = "C" if is_temp else ""
     for d in dets:
         x, y, w, h = d["bbox"]
-        cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 255, 0), 1)
+        pri = d.get("priority", False)
+        col = (0, 255, 255) if pri else (0, 255, 0)   # yellow = skin priority
+        cv2.rectangle(vis, (x, y), (x + w, y + h), col, 1)
         cx, cy = int(d["centroid"][0]), int(d["centroid"][1])
-        cv2.drawMarker(vis, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 6, 1)
-        cv2.putText(vis, f"{d['val_max']:.0f}{unit}", (x, max(8, y - 2)),
+        cv2.drawMarker(vis, (cx, cy), col, cv2.MARKER_CROSS, 6, 1)
+        pk = d.get("peaks", 0)
+        tag = f"{d['val_max']:.0f}{unit}/{pk}p" + ("*" if pri else "")
+        cv2.putText(vis, tag, (x, max(8, y - 2)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 255, 255), 1, cv2.LINE_AA)
 
     mode = "RAD" if is_temp else "AGC"
     sens_s = f"+{sens:.1f}C" if is_temp else f"p{sens:.0f}"
-    cv2.putText(vis, f"{mode} n={len(dets)} bg={bg:.1f} thr={thr:.1f} {sens_s} {fps:.0f}fps",
+    band = ""
+    if is_temp and band_lo is not None:
+        band = f" band[{band_lo:.0f}-{band_hi:.0f}]"
+    cv2.putText(vis, f"{mode} n={len(dets)} bg={bg:.1f} thr={thr:.1f}{band} {fps:.0f}fps",
                 (3, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Mounting mode on its own line, colour-coded so it is obvious at a glance.
+    vlabel = SHAPE_RULES.get(view, SHAPE_RULES["any"])["label"]
+    vcolor = {"vertical": (80, 220, 255), "horizontal": (255, 200, 80)}.get(view, (200, 200, 200))
+    coh_s = f"coh={cohesion}" + ("!" if cohesion >= 3 else "")
+    coh_c = (60, 60, 255) if cohesion >= 3 else vcolor   # red: merges real people
+    cv2.putText(vis, f"[v] {vlabel}", (3, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.30, vcolor, 1, cv2.LINE_AA)
+    cv2.putText(vis, coh_s, (108, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.30, coh_c, 1, cv2.LINE_AA)
+
     if logging_on:
         cv2.circle(vis, (vis.shape[1] - 8, 8), 4, (0, 0, 255), -1)
     return vis
@@ -401,12 +953,17 @@ def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on):
 HELP = """
   q/ESC quit | s save frame | l toggle logging
   [ less sensitive   ] more sensitive
-  a re-estimate background | r cycle view (color/mask/both)
+  v cycle MOUNTING MODE:  vertical (down) / horizontal (fwd) / any
+  1 = vertical (overhead)   2 = horizontal (wall)   3 = any
+  m MORE cohesion (fewer fragments)   n LESS cohesion (more separation)
+  b reset static background   B toggle static suppression on/off
+  a print background/threshold | r cycle display (color/mask/both)
 """
 
 
 # ----------------------------------------------------------------------------
 def main():
+    global SKIN_BAND_C            # retunable from the command line
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", type=int, default=None)
     ap.add_argument("--list", action="store_true")
@@ -417,15 +974,51 @@ def main():
     ap.add_argument("--note", type=str, default="")
     ap.add_argument("--opencv", action="store_true",
                     help="skip libuvc and force the OpenCV capture path")
-    ap.add_argument("--view", choices=["overhead", "horizontal", "any"], default="any",
-                    help="mounting geometry — selects the shape envelope")
+    ap.add_argument("--view", choices=VIEW_MODES, default="any",
+                    help="mounting geometry: vertical (ceiling/down), "
+                         "horizontal (wall/forward), any. Switch live with 'v'.")
     ap.add_argument("--tmax", type=float, default=DEFAULT_TMAX_C,
-                    help="upper temperature bound °C (rejects equipment)")
+                    help=f"upper bound of the human band °C (default "
+                         f"{DEFAULT_TMAX_C}; rejects laptops/lamps/radiators)")
+    ap.add_argument("--tmin", type=float, default=DEFAULT_TMIN_C,
+                    help=f"lower bound of the human band °C (default "
+                         f"{DEFAULT_TMIN_C}; rejects sun-warmed surfaces)")
     ap.add_argument("--min-area", type=int, default=MIN_BLOB_AREA,
                     help="minimum blob area in px (lower = longer range)")
     ap.add_argument("--no-split", action="store_true",
                     help="disable watershed splitting of touching bodies")
+    ap.add_argument("--min-sep", type=int, default=None,
+                    help="vertical mode: min px between two people's centres "
+                         "(shoulder width at your mount height; default 26)")
+    ap.add_argument("--skin-lo", type=float, default=None,
+                    help=f"low edge of the exposed-skin priority band °C "
+                         f"(default {SKIN_BAND_C[0]}). Blobs containing skin "
+                         f"bypass the shape and peak filters.")
+    ap.add_argument("--skin-hi", type=float, default=None,
+                    help=f"high edge of the skin priority band °C "
+                         f"(default {SKIN_BAND_C[1]})")
+    ap.add_argument("--min-peaks", type=int, default=None,
+                    help="reject blobs with fewer distinct warm centres than "
+                         "this (default 2). A human has several; a lamp or "
+                         "laptop has one. Set 1 to disable.")
+    ap.add_argument("--peak-check-area", type=int, default=None,
+                    help="only apply --min-peaks above this blob area (px); "
+                         "distant people legitimately have one peak")
+    ap.add_argument("--no-static", action="store_true",
+                    help="disable static-object suppression (keeps furniture "
+                         "and electronics as detections)")
+    ap.add_argument("--cohesion", type=int, default=1,
+                    help="anti-fragmentation strength 0-4 (default 1). "
+                         "Bench-measured: 4 for vertical single-occupant, "
+                         "2 max when multiple people may stand close "
+                         "(>=3 merges two people). Live: m / n")
     args = ap.parse_args()
+    global SKIN_BAND_FIXED
+    if args.skin_lo is not None or args.skin_hi is not None:
+        lo = args.skin_lo if args.skin_lo is not None else SKIN_BAND_C[0]
+        hi = args.skin_hi if args.skin_hi is not None else SKIN_BAND_C[1]
+        SKIN_BAND_C = (lo, hi)
+        SKIN_BAND_FIXED = True
 
     if args.list:
         for i, w, h, dt, lep in scan_devices():
@@ -467,11 +1060,16 @@ def main():
     csv_path = os.path.join(LOG_DIR, f"session_{session}.csv")
     fcsv = open(csv_path, "w", newline="")
     wr = csv.writer(fcsv)
-    wr.writerow(["timestamp", "frame", "mode", "n_det", "background", "threshold",
-                 "cx", "cy", "area_px", "val_max", "note"])
+    wr.writerow(["timestamp", "frame", "mode", "view", "n_det", "background",
+                 "threshold", "cx", "cy", "area_px", "val_max", "aspect",
+                 "extent", "peaks", "std_c", "skin_px", "priority", "note"])
 
     logging_on = False
-    view = 0
+    suppressor = StaticSuppressor()
+    suppressor.enabled = not args.no_static
+    cohesion = args.cohesion       # anti-fragmentation strength 0..4
+    view_mode = args.view          # 'vertical' | 'horizontal' | 'any'
+    view = 0                       # display style: color / mask / blended
     frame_i = 0
     fps = 0.0
     t_last = time.time()
@@ -484,13 +1082,25 @@ def main():
             break
         frame_i += 1
 
-        thr, bg = compute_threshold(data, is_temp, sens)
+        eff_sens = sens
+        if is_temp and args.delta is None:
+            eff_sens = SHAPE_RULES.get(view_mode, {}).get("delta", DEFAULT_DELTA_C)
+        thr, bg = compute_threshold(data, is_temp, eff_sens)
+        suppressor.update(data)
+        moving = suppressor.moving_mask(data) if is_temp else None
         dets, mask = detect_people(
             data, thr,
-            tmax=(args.tmax if is_temp else None),   # band only makes sense on °C
-            view=args.view,
+            # the absolute band only means anything on real temperatures
+            tmax=(args.tmax if is_temp else None),
+            tmin=(args.tmin if is_temp else None),
+            view=view_mode,
             min_area=args.min_area,
             split=not args.no_split,
+            min_sep=args.min_sep,
+            cohesion=cohesion,
+            min_peaks=args.min_peaks,
+            peak_check_area=args.peak_check_area,
+            moving=moving,
         )
 
         now = time.time()
@@ -504,18 +1114,26 @@ def main():
             mode = "RAD" if is_temp else "AGC"
             if dets:
                 for d in dets:
-                    wr.writerow([ts, frame_i, mode, len(dets), f"{bg:.2f}", f"{thr:.2f}",
+                    wr.writerow([ts, frame_i, mode, view_mode, len(dets),
+                                 f"{bg:.2f}", f"{thr:.2f}",
                                  f"{d['centroid'][0]:.1f}", f"{d['centroid'][1]:.1f}",
-                                 d["area_px"], f"{d['val_max']:.2f}", args.note])
+                                 d["area_px"], f"{d['val_max']:.2f}",
+                                 f"{d.get('aspect', 0):.2f}", f"{d.get('extent', 0):.2f}",
+                                 d.get('peaks', ''), f"{d.get('std_c', 0):.2f}",
+                                 d.get('skin_px', 0), int(d.get('priority', False)),
+                                 args.note])
             else:
-                wr.writerow([ts, frame_i, mode, 0, f"{bg:.2f}", f"{thr:.2f}",
-                             "", "", "", "", args.note])
+                wr.writerow([ts, frame_i, mode, view_mode, 0, f"{bg:.2f}",
+                             f"{thr:.2f}", "", "", "", "", "", "", "", "", "", "", args.note])
 
         color = colorize(data)
         maskc = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
         base = color if view == 0 else (maskc if view == 1 else
                                         cv2.addWeighted(color, 0.7, maskc, 0.3, 0))
-        vis = draw_overlay(base.copy(), dets, bg, thr, sens, is_temp, fps, logging_on)
+        vis = draw_overlay(base.copy(), dets, bg, thr, eff_sens, is_temp, fps,
+                           logging_on, view_mode, cohesion,
+                           args.tmin if is_temp else None,
+                           args.tmax if is_temp else None)
         cv2.imshow("FLUXNET thermal baseline",
                    cv2.resize(vis, (vis.shape[1] * DISPLAY_SCALE, vis.shape[0] * DISPLAY_SCALE),
                               interpolation=cv2.INTER_NEAREST))
@@ -541,6 +1159,31 @@ def main():
             print(f"  background = {bg:.2f}, threshold = {thr:.2f}")
         elif k == ord("r"):
             view = (view + 1) % 3
+        elif k == ord("v"):
+            view_mode = VIEW_MODES[(VIEW_MODES.index(view_mode) + 1) % len(VIEW_MODES)]
+            print(f"  mounting mode -> {SHAPE_RULES[view_mode]['label']}")
+        elif k == ord("m"):
+            cohesion = min(4, cohesion + 1)
+            print(f"  cohesion -> {cohesion} (less fragmentation: "
+                  f"close={5+2*cohesion}px, gap={6+3*cohesion}px, seed={3+cohesion}px)")
+            if cohesion >= 3:
+                print("  ** note: cohesion >=3 merges two people standing close "
+                      "into one detection.")
+                print("     Correct for SINGLE-occupant vertical mode (4 is the "
+                      "bench-measured best); avoid if two people may be present.")
+        elif k == ord("n"):
+            cohesion = max(0, cohesion - 1)
+            print(f"  cohesion -> {cohesion} (more separation: "
+                  f"close={5+2*cohesion}px, gap={6+3*cohesion}px, seed={3+cohesion}px)")
+        elif k in (ord("1"), ord("2"), ord("3")):
+            view_mode = VIEW_MODES[k - ord("1")]
+            print(f"  mounting mode -> {SHAPE_RULES[view_mode]['label']}")
+        elif k == ord("b"):
+            suppressor.reset()
+            print("  static background reset — relearning")
+        elif k == ord("B"):
+            suppressor.enabled = not suppressor.enabled
+            print(f"  static suppression {'ON' if suppressor.enabled else 'OFF'}")
         elif k == ord("h"):
             print(HELP)
 
