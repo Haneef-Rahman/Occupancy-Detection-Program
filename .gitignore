@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- FLUXNET: captured sensor data (keep the repo about code) ----
+logs/
+*.npy
+*.csv
+frame_*.png
+
+# third-party build dependency, not project code
+libuvc/
+**/libuvc/
