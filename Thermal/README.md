@@ -89,18 +89,51 @@ python thermal_detect.py --device 1 --delta 4.0 --note "2-person walkthrough"
 
 ## How the detection works
 
-1. **Radiometric capture** — asks the board for 16-bit Y16/TLinear so each pixel
-   is an absolute temperature, not an auto-gain brightness. (AGC drifts as the
-   scene changes, which makes any fixed threshold meaningless.)
-2. **Ambient estimate** — median pixel of the frame; people are a minority of
-   pixels, so the median tracks room temperature.
-3. **Threshold** at `ambient + delta` (default +4 °C).
-4. **Morphology** — open then close: removes speckle, fills pinholes.
-5. **Connected components** → blobs, filtered by area and aspect ratio
-   (rejects hot pipes, light strips, tiny reflections).
+1. **Radiometric capture** — 16-bit Y16/TLinear, so each pixel is an absolute
+   temperature rather than an auto-gain brightness. (AGC drifts as the scene
+   changes, which makes any fixed threshold meaningless.)
+2. **Ambient estimate** — median pixel; people are a minority of the frame, so
+   the median tracks room temperature.
+3. **Temperature band** — `ambient + delta < T < tmax` (default 38 °C).
+   The *upper* bound is what rejects equipment: laptops ~40 °C, lamps ~50 °C,
+   radiators ~60 °C. Because clutter is removed by temperature, the minimum
+   blob area can be small (6 px), which is what gives range on small, distant
+   targets.
+4. **Morphology** — open (despeckle) then close (fill gaps).
+5. **Watershed split** — two people standing close merge into one connected
+   component, and no filter can undo that; the blob must be cut. A distance
+   transform gives each body a peak with a valley between, and watershed cuts
+   along the valley. This is the shape-domain analogue of the head-peak /
+   shoulder-valley separation the depth sensor performs.
+6. **Shape gate** — view-dependent, because the geometry differs completely:
 
-Every detection is explainable: a temperature and a shape. No weights, no
-training, no per-site calibration.
+   | `--view` | aspect (h/w) | extent | rationale |
+   |---|---|---|---|
+   | `overhead` | 0.45 – 2.2 | ≥ 0.35 | head + shoulders from above: roughly round |
+   | `horizontal` | 1.1 – 6.0 | ≥ 0.25 | standing body: tall ellipse |
+   | `any` | 0.30 – 7.0 | ≥ 0.20 | permissive default |
+
+7. **Fragment merge** — a body split by cool clothing rejoins. The split/merge
+   conflict is resolved by the axis of separation: two people stand **side by
+   side**, whereas head/torso/legs stack **vertically**. A mainly-horizontal
+   split stays split; a mainly-vertical one is merged back.
+
+Every detection is explainable: a temperature, a shape, and a geometry rule.
+No weights, no training, no per-site calibration.
+
+### Choosing settings
+
+```bash
+./run.sh thermal_detect.py --view overhead                  # ceiling mount
+./run.sh thermal_detect.py --view horizontal --min-area 4   # wall mount, long range
+./run.sh thermal_detect.py --tmax 45                        # allow warmer targets
+./run.sh thermal_detect.py --no-split                       # disable watershed
+```
+
+Longer range comes from lowering `--min-area`; the `--tmax` band is what keeps
+that safe. If distant people are still missed, lower the detection threshold
+too (`[` / `]` live, or `--delta 2.5`) — at range, atmospheric attenuation and
+pixel mixing reduce apparent contrast.
 
 ## Known limits (these are the fusion arguments, not bugs)
 

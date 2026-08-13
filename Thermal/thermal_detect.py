@@ -44,11 +44,25 @@ import numpy as np
 LEPTON_W, LEPTON_H = 160, 120
 DEFAULT_DELTA_C = 4.0      # radiometric: °C above ambient
 DEFAULT_PCTL = 96.0        # AGC: percentile of brightness treated as "hot"
-MIN_BLOB_AREA = 20
+
+# Human surface temperature ceiling. Skin peaks ~36 C; clothed body lower.
+# Anything hotter is equipment: laptops ~40, lamps ~50, radiators ~60+.
+# This upper bound is what lets the area filter be loosened safely.
+DEFAULT_TMAX_C = 38.0
+
+MIN_BLOB_AREA = 6          # lowered: a person at range is only a few px
 MAX_BLOB_AREA = 14000
-MAX_ASPECT = 6.0
 DISPLAY_SCALE = 5
 LOG_DIR = "logs"
+
+# Shape envelopes differ completely by mounting geometry.
+#   overhead   : head+shoulders seen from above -> roughly round
+#   horizontal : standing body -> tall ellipse
+SHAPE_RULES = {
+    "overhead":   dict(aspect_min=0.45, aspect_max=2.2, extent_min=0.35),
+    "horizontal": dict(aspect_min=1.1,  aspect_max=6.0, extent_min=0.25),
+    "any":        dict(aspect_min=0.30, aspect_max=7.0, extent_min=0.20),
+}
 
 
 # ----------------------------------------------------------------------------
@@ -160,6 +174,18 @@ def merge_nearby(dets, gap_px):
         return dets
 
     def near(a, b):
+        # Regions sharing a parent component were cut apart by watershed.
+        # Whether to re-merge them is decided by the axis of separation:
+        # two people stand SIDE BY SIDE, while the parts of a single body
+        # (head / torso / legs) stack VERTICALLY. So a mainly-horizontal
+        # split is two bodies (keep separate); a mainly-vertical one is
+        # fragments of one body (merge back).
+        pa, pb = a.get("parent_cc"), b.get("parent_cc")
+        if pa is not None and pa == pb:
+            dxc = abs(a["centroid"][0] - b["centroid"][0])
+            dyc = abs(a["centroid"][1] - b["centroid"][1])
+            if dxc > dyc:
+                return False
         ax, ay, aw, ah = a["bbox"]
         bx, by, bw, bh = b["bbox"]
         dx = max(0, max(ax, bx) - min(ax + aw, bx + bw))
@@ -214,29 +240,128 @@ def merge_nearby(dets, gap_px):
     return merged
 
 
-def detect_people(data, threshold, merge_gap=6):
-    mask = (data > threshold).astype(np.uint8) * 255
+def split_touching(mask, min_sep=3):
+    """
+    Split blobs formed by two adjacent bodies.
+
+    Two people standing close merge into one connected component, and no
+    downstream filter can undo that — the blob must be cut. A distance
+    transform gives each body a peak at its centre with a valley between;
+    watershed cuts along the valley. This is the shape-domain version of the
+    head-peaks / shoulder-valley separation the depth sensor performs.
+
+    Returns a label image (0 = background, 1..n = separated regions).
+    """
+    binary = (mask > 0).astype(np.uint8)
+    if binary.sum() == 0:
+        return np.zeros_like(binary, np.int32), 0
+
+    dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+
+    # Local maxima of the distance map = body centres. Comparing against a
+    # dilation finds them without a global threshold, so blobs of different
+    # sizes are handled correctly.
+    k = 2 * min_sep + 1
+    dil = cv2.dilate(dist, np.ones((k, k), np.uint8))
+    peaks = ((dist >= dil - 1e-6) & (dist >= min_sep)).astype(np.uint8)
+
+    n_seeds, seeds = cv2.connectedComponents(peaks)
+    if n_seeds <= 2:                      # 0 or 1 real seed: nothing to split
+        n, labels = cv2.connectedComponents(binary)
+        return labels, n - 1
+
+    # Marker convention for cv2.watershed:
+    #   0        = unknown, to be filled
+    #   1        = background
+    #   2..n+1   = seeds
+    # Leaving non-seed foreground at 0 is essential — that is the region
+    # watershed grows the seeds into.
+    markers = np.zeros(binary.shape, np.int32)
+    markers[binary == 0] = 1
+    markers[peaks > 0] = seeds[peaks > 0] + 1
+
+    img3 = cv2.cvtColor(binary * 255, cv2.COLOR_GRAY2BGR)
+    cv2.watershed(img3, markers)
+
+    out = np.zeros_like(markers)
+    idx = 0
+    for lab in np.unique(markers):
+        if lab <= 1:                      # background (1) and ridges (-1)
+            continue
+        region = (markers == lab) & (binary > 0)
+        if region.sum() == 0:
+            continue
+        idx += 1
+        out[region] = idx
+    return out, idx
+
+
+def shape_ok(w, h, area, rules):
+    """View-dependent shape gate. Returns (passed, aspect, extent)."""
+    aspect = h / max(1, w)                       # >1 = taller than wide
+    extent = area / max(1, w * h)                # blob fill of its bbox
+    ok = (rules["aspect_min"] <= aspect <= rules["aspect_max"]
+          and extent >= rules["extent_min"])
+    return ok, aspect, extent
+
+
+def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
+                  min_area=MIN_BLOB_AREA, split=True):
+    """
+    Band-threshold -> clean -> split touching bodies -> shape filter.
+
+    tmax : upper temperature bound (°C). Rejects equipment, which is what
+           makes a low min_area safe. None disables (AGC mode).
+    view : 'overhead' | 'horizontal' | 'any' — selects the shape envelope.
+    """
+    if tmax is not None:
+        mask = ((data > threshold) & (data < tmax)).astype(np.uint8) * 255
+    else:
+        mask = (data > threshold).astype(np.uint8) * 255
+
     k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k3)
     k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k5)
 
-    n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    # Parent connected components, recorded before any splitting, so that
+    # merge_nearby can tell "fragments of one body" from "two bodies we cut".
+    _, cc_labels = cv2.connectedComponents((mask > 0).astype(np.uint8))
+
+    if split:
+        labels, n = split_touching(mask)
+    else:
+        n_cc, labels = cv2.connectedComponents((mask > 0).astype(np.uint8))
+        n = n_cc - 1
+
+    rules = SHAPE_RULES.get(view, SHAPE_RULES["any"])
     dets = []
-    for i in range(1, n):
-        x, y, w, h, area = stats[i]
-        if area < MIN_BLOB_AREA or area > MAX_BLOB_AREA:
+    for i in range(1, n + 1):
+        ys, xs = np.where(labels == i)
+        if xs.size == 0:
             continue
-        if max(w, h) / max(1, min(w, h)) > MAX_ASPECT:
+        area = int(xs.size)
+        if area < min_area or area > MAX_BLOB_AREA:
             continue
-        blob = data[labels == i]
+        x, y = int(xs.min()), int(ys.min())
+        w, h = int(xs.max() - x + 1), int(ys.max() - y + 1)
+
+        ok, aspect, extent = shape_ok(w, h, area, rules)
+        if not ok:
+            continue
+
+        blob = data[ys, xs]
         dets.append({
-            "bbox": (int(x), int(y), int(w), int(h)),
-            "centroid": (float(cents[i][0]), float(cents[i][1])),
-            "area_px": int(area),
+            "bbox": (x, y, w, h),
+            "centroid": (float(xs.mean()), float(ys.mean())),
+            "area_px": area,
             "val_max": float(blob.max()),
             "val_mean": float(blob.mean()),
+            "aspect": float(aspect),
+            "extent": float(extent),
+            "parent_cc": int(cc_labels[ys[0], xs[0]]),
         })
+
     dets = merge_nearby(dets, merge_gap)
     dets.sort(key=lambda d: d["area_px"], reverse=True)
     return dets, mask
@@ -292,6 +417,14 @@ def main():
     ap.add_argument("--note", type=str, default="")
     ap.add_argument("--opencv", action="store_true",
                     help="skip libuvc and force the OpenCV capture path")
+    ap.add_argument("--view", choices=["overhead", "horizontal", "any"], default="any",
+                    help="mounting geometry — selects the shape envelope")
+    ap.add_argument("--tmax", type=float, default=DEFAULT_TMAX_C,
+                    help="upper temperature bound °C (rejects equipment)")
+    ap.add_argument("--min-area", type=int, default=MIN_BLOB_AREA,
+                    help="minimum blob area in px (lower = longer range)")
+    ap.add_argument("--no-split", action="store_true",
+                    help="disable watershed splitting of touching bodies")
     args = ap.parse_args()
 
     if args.list:
@@ -352,7 +485,13 @@ def main():
         frame_i += 1
 
         thr, bg = compute_threshold(data, is_temp, sens)
-        dets, mask = detect_people(data, thr)
+        dets, mask = detect_people(
+            data, thr,
+            tmax=(args.tmax if is_temp else None),   # band only makes sense on °C
+            view=args.view,
+            min_area=args.min_area,
+            split=not args.no_split,
+        )
 
         now = time.time()
         dt = now - t_last
