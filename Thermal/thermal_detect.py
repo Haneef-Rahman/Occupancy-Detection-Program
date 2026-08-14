@@ -621,6 +621,115 @@ def cluster_small(dets, small_area, radius, min_sep_px=0,
     return out
 
 
+SIGMA_SB = 5.670374419e-8      # Stefan-Boltzmann constant, W m^-2 K^-4
+
+
+def density_map(data, region_mask, ambient_c, kind="binary", emissivity=0.98):
+    """
+    Build Hu's density distribution rho(x, y) for one blob.
+
+    Hu (1962) defines the moments over a "density distribution function"
+    rho(x,y) but never fixes what it is — assigning mass to pixels is a
+    modelling choice. Three options, in increasing physical content:
+
+      'binary'   rho = 1 inside the region, 0 outside.
+                 Pure geometry; comparable with the shape-recognition
+                 literature, discards all temperature information.
+
+      'excess'   rho = max(0, T - T_ambient).
+                 Moments now describe WHERE THE HEAT IS, not just where the
+                 outline is: a head-heavy body differs from a vent-heavy
+                 laptop even at similar outlines.
+
+      'radiant'  rho = eps * sigma * (T^4 - T_ambient^4)   [W/m^2]
+                 The physically exact version. Stefan-Boltzmann makes this
+                 the excess radiated power per unit area, and skin emissivity
+                 ~0.98 (Steketee 1973) makes the approximation tight. m00 is
+                 then total excess radiated power and the centroid is the
+                 true centre of radiated energy.
+
+    Ambient MUST be subtracted. Raw temperature gives every background pixel
+    a mass of ~24, so the moments would describe the image frame rather than
+    the person — and Hu's uniqueness theorem requires rho to be non-zero only
+    over a finite region, which only the ambient-referenced forms satisfy.
+    """
+    m = region_mask > 0
+    rho = np.zeros(data.shape, np.float64)
+
+    if kind == "binary":
+        rho[m] = 1.0
+    elif kind == "excess":
+        rho[m] = np.maximum(0.0, data[m] - ambient_c)
+    elif kind == "radiant":
+        t_k = data[m] + 273.15
+        a_k = ambient_c + 273.15
+        rho[m] = np.maximum(0.0, emissivity * SIGMA_SB * (t_k ** 4 - a_k ** 4))
+    else:
+        raise ValueError(f"unknown density kind: {kind}")
+    return rho
+
+
+def shape_moments(data, region_mask, ambient_c, kind="binary"):
+    """
+    Hu's seven invariants plus the classical region descriptors, computed on
+    the chosen density map.
+
+    Returns a dict. Hu values are log-compressed (sign-preserving) because the
+    raw invariants span many orders of magnitude and are unusable as features
+    otherwise.
+    """
+    rho = density_map(data, region_mask, ambient_c, kind)
+    M = cv2.moments(rho.astype(np.float32), binaryImage=False)
+    if M["m00"] <= 0:
+        return None
+
+    hu = cv2.HuMoments(M).flatten()
+    hu_log = [float(-np.sign(h) * np.log10(abs(h))) if h != 0 else 0.0 for h in hu]
+
+    out = {f"hu{i+1}": v for i, v in enumerate(hu_log)}
+    out["mass"] = float(M["m00"])          # area / total excess / total watts
+    out["cx"] = float(M["m10"] / M["m00"])
+    out["cy"] = float(M["m01"] / M["m00"])
+
+    # Classical region descriptors, on the binary support of the same region.
+    m8 = (region_mask > 0).astype(np.uint8)
+    cnts, _ = cv2.findContours(m8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if cnts:
+        c = max(cnts, key=cv2.contourArea)
+        area = float(cv2.contourArea(c))
+        per = float(cv2.arcLength(c, True))
+        hull = cv2.convexHull(c)
+        hull_area = float(cv2.contourArea(hull))
+        out["compactness"] = (4.0 * np.pi * area / (per * per)) if per > 0 else 0.0
+        out["solidity"] = (area / hull_area) if hull_area > 0 else 0.0
+
+        # Convexity defects = the gaps a body has and a box does not:
+        # armpits, the space between legs, the neck notch.
+        n_def, deepest = 0, 0.0
+        if len(c) > 3:
+            hull_i = cv2.convexHull(c, returnPoints=False)
+            if hull_i is not None and len(hull_i) > 3:
+                try:
+                    d = cv2.convexityDefects(c, np.sort(hull_i[:, 0])[::-1][:, None])
+                    if d is not None:
+                        depths = d[:, 0, 3] / 256.0
+                        n_def = int((depths > 1.0).sum())
+                        deepest = float(depths.max())
+                except cv2.error:
+                    pass
+        out["n_defects"] = n_def
+        out["deepest_defect"] = deepest
+
+        # Second-order shape: eccentricity from the covariance of the region.
+        mu20, mu02, mu11 = M["mu20"], M["mu02"], M["mu11"]
+        tr = mu20 + mu02
+        det = mu20 * mu02 - mu11 * mu11
+        disc = max(0.0, tr * tr / 4.0 - det)
+        l1, l2 = tr / 2.0 + np.sqrt(disc), tr / 2.0 - np.sqrt(disc)
+        out["eccentricity"] = float(np.sqrt(1 - l2 / l1)) if l1 > 0 else 0.0
+    return out
+
+
 def rect_fill(region_mask):
     """
     How completely a blob fills its MINIMUM-AREA (rotated) rectangle.
