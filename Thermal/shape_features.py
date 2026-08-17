@@ -114,12 +114,114 @@ def skeleton_topology(skel, prune_px=3):
 
 
 # ---------------------------------------------------------------------------
+# Peura & Iivarinen descriptors, via Zhang & Lu (2004) §3.1.1
+#
+# The survey's own recommendation for these: "simple global descriptors ...
+# are usually used as FILTERS TO ELIMINATE FALSE HITS or combined with other
+# shape descriptors" — exactly the laptop problem. It also warns (Fig. 2)
+# that no single one suffices: eccentricity fails on some shapes where
+# circularity succeeds and vice versa, so they must be combined.
+# ---------------------------------------------------------------------------
+def contour_variances(contour):
+    """
+    circular_variance : spread of boundary radii about their mean.
+        circle -> 0, ellipse -> small, rectangle -> larger.
+
+    elliptic_variance : the same spread measured against the BEST-FIT
+        ELLIPSE, using Mahalanobis distance under the boundary's own
+        covariance. Every point of a perfect ellipse has identical
+        Mahalanobis radius, so an ellipse scores 0 regardless of how
+        elongated it is — while a rectangle's four corners sit far outside
+        its inscribed ellipse and drive the value up.
+
+        This is the discriminator for the laptop case: a body seen from
+        above is approximately elliptical (head + shoulders); a laptop is
+        not, no matter its aspect ratio or rotation.
+    """
+    out = {}
+    p = contour.reshape(-1, 2).astype(np.float64)
+    if p.shape[0] < 5:
+        return out
+
+    c = p.mean(axis=0)
+    d = p - c
+
+    # --- circular variance: deviation from a circle
+    r = np.sqrt((d ** 2).sum(axis=1))
+    mu_r = r.mean()
+    if mu_r > 1e-9:
+        out["circular_var"] = float(((r - mu_r) ** 2).mean() / (mu_r ** 2))
+
+    # --- elliptic variance: deviation from the best-fit ellipse
+    C = np.cov(d.T)
+    if C.shape == (2, 2) and abs(np.linalg.det(C)) > 1e-12:
+        Ci = np.linalg.inv(C)
+        # Mahalanobis radius of every boundary point
+        rE = np.sqrt(np.einsum("ij,jk,ik->i", d, Ci, d))
+        mu_E = rE.mean()
+        if mu_E > 1e-9:
+            out["elliptic_var"] = float(((rE - mu_E) ** 2).mean() / (mu_E ** 2))
+    return out
+
+
+def bending_energy(contour, smooth=3):
+    """
+    Mean squared curvature along the boundary, plus the count of sharp
+    curvature peaks.
+
+    A rectangle concentrates ALL of its turning into four points: high peak
+    curvature, four corners, low curvature everywhere else. A body turns
+    gradually and continuously, so its curvature is spread out. `n_corners`
+    is therefore close to 4 for any rectangle at any rotation, and rarely
+    exactly 4 for a person.
+    """
+    out = {}
+    p = contour.reshape(-1, 2).astype(np.float64)
+    n = p.shape[0]
+    if n < 12:
+        return out
+
+    # Smooth the boundary before differentiating — curvature on a raw
+    # pixel-stepped contour is dominated by staircase noise.
+    k = max(3, smooth | 1)
+    pad = np.vstack([p[-k:], p, p[:k]])
+    ker = np.ones(k) / k
+    xs = np.convolve(pad[:, 0], ker, mode="same")[k:-k]
+    ys = np.convolve(pad[:, 1], ker, mode="same")[k:-k]
+
+    dx = np.gradient(xs); dy = np.gradient(ys)
+    ddx = np.gradient(dx); ddy = np.gradient(dy)
+    denom = (dx * dx + dy * dy) ** 1.5
+    denom[denom < 1e-9] = 1e-9
+    curv = np.abs(dx * ddy - dy * ddx) / denom
+
+    perim = float(cv2.arcLength(contour, True))
+    scale = perim / max(1, n)                      # normalise for size
+    out["bending_energy"] = float((curv ** 2).mean() * scale)
+    out["curv_max"] = float(curv.max() * scale)
+
+    # Corner count: curvature peaks well above the boundary's own median.
+    thr = max(curv.mean() + 2.0 * curv.std(), 0.15)
+    peaks = curv > thr
+    if peaks.any():
+        lab = np.diff(np.concatenate(([0], peaks.view(np.int8), [0])))
+        out["n_corners"] = int((lab == 1).sum())
+    else:
+        out["n_corners"] = 0
+    return out
+
+
+# ---------------------------------------------------------------------------
 # STRUCTURAL — articulation, symmetry, non-convexity
 # ---------------------------------------------------------------------------
 def structural_features(mask):
     out = {}
     m8 = (mask > 0).astype(np.uint8)
-    cnts, _ = cv2.findContours(m8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # CHAIN_APPROX_NONE, not SIMPLE: SIMPLE collapses straight runs to their
+    # endpoints, so an axis-aligned rectangle arrives as FOUR points and every
+    # contour-based descriptor silently returns nothing. The boundary-sampling
+    # descriptors below need every pixel of the outline.
+    cnts, _ = cv2.findContours(m8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not cnts:
         return out
     c = max(cnts, key=cv2.contourArea)
@@ -189,6 +291,11 @@ def structural_features(mask):
         l1, l2 = tr / 2 + np.sqrt(disc), tr / 2 - np.sqrt(disc)
         out["eccentricity"] = float(np.sqrt(1 - l2 / l1)) if l1 > 0 else 0.0
 
+    # Peura & Iivarinen descriptors (Zhang & Lu 2004, §3.1.1)
+    out.update(contour_variances(c))
+    out.update(bending_energy(c))
+    out["convexity"] = float(cv2.arcLength(hull, True) / per) if per > 0 else 1.0
+
     # Skeleton topology — how many limbs radiate from a trunk.
     out.update(skeleton_topology(skeletonize(m8)))
     out["sk_len_over_area"] = out["sk_length"] / area if area > 0 else 0.0
@@ -238,6 +345,88 @@ def thermal_features(data, mask, ambient_c, prominence=2.5, min_sep=2):
     # not an arbitrary score.
     t_k, a_k = v + 273.15, ambient_c + 273.15
     out["radiant_excess"] = float(0.98 * SIGMA_SB * np.sum(t_k ** 4 - a_k ** 4))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# CONTEXT — the shape of the warm region SURROUNDING the hot blob
+#
+# A laptop does not present as a rectangle at the detection threshold: only
+# its vent and CPU corner clear ambient+4, and that hot patch is an irregular
+# blob which passes every shape test. The rectangle exists one temperature
+# level down — the whole chassis sits a degree or two above ambient.
+#
+# So the object's true geometry is recovered by re-thresholding LOWER and
+# measuring the region that contains the hot blob. This is a level-set /
+# scale-space argument (Zhang & Lu §3.2.4) applied to temperature rather than
+# to spatial scale: examine the shape across the parameter and ask whether it
+# stays self-consistent.
+#
+#   person  : the warm footprint is a slightly larger body — still organic,
+#             still non-convex. Shape character is PRESERVED across levels.
+#   laptop  : a blobby hot patch sits inside a hard rectangle. Shape character
+#             CHANGES completely between levels — that change is the signal.
+# ---------------------------------------------------------------------------
+def thermal_context(data, blob_mask, ambient_c, low_delta=1.5, tmax=None,
+                    grow_px=6):
+    """
+    Re-threshold at ambient+low_delta, isolate the warm region containing this
+    blob, and describe it. Returns ctx_* features plus the growth ratio.
+    """
+    out = {}
+    if blob_mask.sum() == 0:
+        return out
+
+    warm = data > (ambient_c + low_delta)
+    if tmax is not None:
+        warm &= data <= (tmax + 6.0)     # allow hotter than the human band:
+                                         # the point is to SEE the equipment
+    warm = warm.astype(np.uint8)
+    warm = cv2.morphologyEx(warm, cv2.MORPH_CLOSE,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+
+    n, lab = cv2.connectedComponents(warm)
+    if n <= 1:
+        return out
+
+    # Which warm component contains the hot blob?
+    b = blob_mask > 0
+    ids, counts = np.unique(lab[b & (lab > 0)], return_counts=True)
+    if ids.size == 0:
+        return out
+    host = int(ids[np.argmax(counts)])
+    host_mask = (lab == host).astype(np.uint8)
+
+    hot_area = float(b.sum())
+    ctx_area = float(host_mask.sum())
+    out["ctx_area"] = ctx_area
+    out["ctx_growth"] = ctx_area / max(1.0, hot_area)
+
+    cnts, _ = cv2.findContours(host_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not cnts:
+        return out
+    c = max(cnts, key=cv2.contourArea)
+    area = float(cv2.contourArea(c))
+    per = float(cv2.arcLength(c, True))
+    if area <= 0 or per <= 0:
+        return out
+
+    hull = cv2.convexHull(c)
+    ha = float(cv2.contourArea(hull))
+    (_, _), (rw, rh), _ = cv2.minAreaRect(c)
+
+    out["ctx_solidity"] = area / ha if ha > 0 else 0.0
+    out["ctx_rect_fill"] = area / (rw * rh) if rw > 1 and rh > 1 else 1.0
+    out["ctx_compactness"] = 4.0 * np.pi * area / (per * per)
+    out.update({f"ctx_{k}": v for k, v in contour_variances(c).items()})
+
+    # Does the hot patch sit INSIDE a much larger rigid body? That pairing —
+    # small irregular hot spot within a large high-rect-fill region — is the
+    # signature of powered equipment, and does not occur for a person, whose
+    # warm footprint is only modestly larger than their hot regions.
+    out["is_equipment_like"] = float(
+        out["ctx_growth"] > 2.5 and out["ctx_rect_fill"] > 0.80
+    )
     return out
 
 
@@ -295,12 +484,77 @@ def projective_features(mask, view="vertical"):
 
 
 # ---------------------------------------------------------------------------
-def extract(data, mask, ambient_c, view="vertical"):
+def equipment_score(f):
+    """
+    Combined evidence that a blob is powered equipment rather than a body.
+
+    Zhang & Lu (2004) §3.1.1 is explicit that simple descriptors "are not
+    suitable to be standalone shape descriptors" and must be combined — and we
+    reproduced that empirically: every single descriptor overlapped between
+    people and laptops. So this accumulates weak evidence instead of applying
+    one threshold, and each term states what it is testing.
+
+    Returns (score, reasons). Score >= 3.0 is strong evidence.
+    """
+    why = []
+
+    # ---- PRIMARY: context. Up to 3.5, and REQUIRED — see the gate below.
+    #
+    # This is the only measure that actually distinguishes the two cases. A
+    # head seen from above is genuinely convex, smooth, unarticulated and
+    # single-peaked: by every rigidity measure it resembles a machine, and
+    # scoring those alone rejected real scalps. What a scalp does NOT have is
+    # a large rigid body around it — its warm surround is itself (growth 1.0),
+    # whereas a laptop's hot vent sits inside a chassis ten times its size.
+    g = f.get("ctx_growth", 1.0)
+    crf = f.get("ctx_rect_fill", 0.0)
+    csol = f.get("ctx_solidity", 0.0)
+
+    ctx = 0.0
+    if g > 2.5 and crf > 0.80:
+        ctx = 3.5
+        why.append(f"hot spot inside rigid surround (x{g:.1f}, fill {crf:.2f})")
+    elif g > 2.0 and crf > 0.88:
+        ctx = 3.0
+        why.append(f"hot spot inside rectangular surround (x{g:.1f})")
+    elif g > 3.5 and csol > 0.95:
+        ctx = 2.5
+        why.append(f"hot spot inside large convex body (x{g:.1f})")
+
+    if ctx == 0.0:
+        # No enclosing rigid body -> not equipment, regardless of how smooth
+        # or convex the blob itself happens to be.
+        return 0.0, []
+
+    # ---- SUPPORTING: corroboration only. Capped so it can never reject on
+    # its own; a blob must first be shown to sit inside something rigid.
+    sup = 0.0
+    if f.get("rect_fill", 0) > 0.86:
+        sup += 0.5; why.append("blob fills its rotated box")
+    if f.get("solidity", 0) > 0.95:
+        sup += 0.4; why.append("blob has no concavities")
+    if f.get("peaks", 9) <= 1 and f.get("area", 0) > 60:
+        sup += 0.4; why.append("single warm centre")
+    if f.get("grad_p90", 0) > 2.5:
+        sup += 0.4; why.append("sharp thermal edges")
+    if f.get("n_defects", 9) == 0 and f.get("area", 0) > 60:
+        sup += 0.3; why.append("no articulation gaps")
+    if f.get("sk_junctions", 9) == 0 and f.get("area", 0) > 150:
+        sup += 0.3; why.append("skeleton does not branch")
+    sup = min(sup, 1.5)
+
+    return ctx + sup, why
+
+
+def extract(data, mask, ambient_c, view="vertical", context=True,
+            low_delta=1.5, tmax=None):
     """Full invariant vector for one blob. Measures only — never filters."""
     f = {}
     f.update(structural_features(mask))
     f.update(thermal_features(data, mask, ambient_c))
     f.update(projective_features(mask, view))
+    if context:
+        f.update(thermal_context(data, mask, ambient_c, low_delta, tmax))
     return f
 
 
@@ -308,6 +562,8 @@ FEATURE_ORDER = [
     # structural
     "area", "compactness", "solidity", "extent", "rect_fill", "aspect",
     "n_defects", "deepest_defect", "mean_defect", "symmetry", "eccentricity",
+    "circular_var", "elliptic_var", "convexity", "bending_energy", "curv_max",
+    "n_corners",
     "sk_endpoints", "sk_junctions", "sk_length", "sk_len_over_area",
     # thermal
     "t_max", "t_mean", "t_std", "t_excess", "peaks", "grad_mean", "grad_p90",
@@ -316,4 +572,8 @@ FEATURE_ORDER = [
     "dt_max", "core_frac", "core_over_span", "core_round",
     "head_band_w", "body_band_w", "head_over_body", "profile_step",
     "span_ratio",
+    # context (warm region surrounding the hot blob)
+    "ctx_area", "ctx_growth", "ctx_solidity", "ctx_rect_fill",
+    "ctx_compactness", "ctx_circular_var", "ctx_elliptic_var",
+    "is_equipment_like",
 ]

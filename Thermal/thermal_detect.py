@@ -40,6 +40,11 @@ from datetime import datetime
 import cv2
 import numpy as np
 
+try:
+    import shape_features as SF
+except ImportError:
+    SF = None
+
 # ----------------------------------------------------------------------------
 LEPTON_W, LEPTON_H = 160, 120
 DEFAULT_DELTA_C = 4.0      # radiometric: °C above ambient
@@ -164,6 +169,7 @@ SHAPE_RULES = {
                        # The laptop is rejected by MAX_EXTENT, not by peaks.
                        delta=4.0, min_peaks=2, peak_check_area=200,
                        surface="hair",       # overhead you see the scalp
+                       reject_equipment=True,
                        label="VERT (down)"),
     "horizontal": dict(aspect_min=1.1,  aspect_max=6.0, extent_min=0.25,
                        merge_axis="vertical",  # stacked = one body
@@ -171,13 +177,14 @@ SHAPE_RULES = {
                        cluster_small=False, small_area=0, cluster_radius=0,
                        delta=4.0, min_peaks=3, peak_check_area=150,
                        surface="skin",       # forward you see faces/hands
+                       reject_equipment=False,
                        label="HORIZ (fwd)"),
     "any":        dict(aspect_min=0.30, aspect_max=7.0, extent_min=0.20,
                        merge_axis="vertical",
                        min_sep_px=0,
                        cluster_small=False, small_area=0, cluster_radius=0,
                        delta=4.0, min_peaks=3, peak_check_area=150,
-                       surface="skin",
+                       surface="skin", reject_equipment=False,
                        label="ANY"),
 }
 
@@ -844,7 +851,8 @@ def shape_ok(w, h, area, rules, priority=False):
 def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   min_area=MIN_BLOB_AREA, split=True, min_sep=None,
                   cohesion=1, tmin=None, min_peaks=None, peak_check_area=None,
-                  body_min_area=14, body_min_c=29.0, moving=None):
+                  body_min_area=14, body_min_c=29.0, moving=None,
+                  equip_thresh=3.0, p_filter=False, p_min=5):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
 
@@ -971,6 +979,35 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                              min_sep_px=eff_min_sep,
                              body_min_area=body_min_area, body_min_c=body_min_c)
 
+    # ---- equipment rejection (vertical mode) --------------------------------
+    # A laptop is not rejected by the shape of its HOT PATCH: only the vent and
+    # CPU corner clear the threshold, and that patch is irregular. The rectangle
+    # lives one temperature level down. So each surviving blob is re-examined
+    # against the warm region that contains it, combined with rigidity and
+    # thermal-structure evidence.
+    if SF is not None and rules.get("reject_equipment") and tmin is not None:
+        kept = []
+        for d in dets:
+            x, y, w, h = d["bbox"]
+            sub = np.zeros(mask.shape, np.uint8)
+            sub[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
+            try:
+                feats = SF.extract(data, sub, float(np.median(data)),
+                                   view=view, context=True, tmax=tmax)
+                score, why = SF.equipment_score(feats)
+            except Exception:
+                score, why, feats = 0.0, [], {}
+            d["equip_score"] = float(score)
+            d["ctx_growth"] = float(feats.get("ctx_growth", 0.0))
+            d["ctx_rect_fill"] = float(feats.get("ctx_rect_fill", 0.0))
+            # Skin priority still wins: a face is a person whatever the
+            # surroundings look like.
+            if score >= equip_thresh and not d.get("priority"):
+                d["reject_reason"] = "; ".join(why[:3])
+                continue
+            kept.append(d)
+        dets = kept
+
     # Thermal texture is measured on the FINAL body (after merging/clustering),
     # not on individual fragments, so the peak count reflects the whole person.
     binm = mask > 0
@@ -1005,6 +1042,18 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         dets = [d for d in dets
                 if d.get("priority") or d["area_px"] < pca or d["peaks"] >= mp]
 
+    # ---- P-FILTER (all view modes, toggled with 'p') ------------------------
+    # Reject anything with p_min or fewer warm centres. A body radiates from
+    # several places at once — face, neck, hands, gaps in clothing — while a
+    # manufactured heat source has one or two. Applied AFTER merging so the
+    # count refers to the assembled body, not a fragment.
+    #
+    # Unconditional by design: it overrides skin priority too. That is the
+    # trade — it is the strongest clutter rejector available, at the cost of
+    # distant or heavily-clothed people who cannot show enough structure.
+    if p_filter:
+        dets = [d for d in dets if d.get("peaks", 0) > p_min]
+
     dets.sort(key=lambda d: (d.get("priority", False), d["area_px"]), reverse=True)
     return dets, mask
 
@@ -1022,7 +1071,7 @@ def colorize(data):
 
 
 def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any", cohesion=1,
-                 band_lo=None, band_hi=None):
+                 band_lo=None, band_hi=None, p_filter=False, p_min=5):
     unit = "C" if is_temp else ""
     for d in dets:
         x, y, w, h = d["bbox"]
@@ -1047,12 +1096,16 @@ def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any",
     # Mounting mode on its own line, colour-coded so it is obvious at a glance.
     vlabel = SHAPE_RULES.get(view, SHAPE_RULES["any"])["label"]
     vcolor = {"vertical": (80, 220, 255), "horizontal": (255, 200, 80)}.get(view, (200, 200, 200))
+    pf_s = f"  P<={p_min}" if p_filter else ""
     coh_s = f"coh={cohesion}" + ("!" if cohesion >= 3 else "")
     coh_c = (60, 60, 255) if cohesion >= 3 else vcolor   # red: merges real people
     cv2.putText(vis, f"[v] {vlabel}", (3, 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.30, vcolor, 1, cv2.LINE_AA)
     cv2.putText(vis, coh_s, (108, 22),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.30, coh_c, 1, cv2.LINE_AA)
+    if pf_s:
+        cv2.putText(vis, pf_s, (150, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.30,
+                    (120, 255, 120), 1, cv2.LINE_AA)
 
     if logging_on:
         cv2.circle(vis, (vis.shape[1] - 8, 8), 4, (0, 0, 255), -1)
@@ -1066,6 +1119,7 @@ HELP = """
   1 = vertical (overhead)   2 = horizontal (wall)   3 = any
   m MORE cohesion (fewer fragments)   n LESS cohesion (more separation)
   b reset static background   B toggle static suppression on/off
+  p toggle P-FILTER (drop blobs with <= --p-min warm centres)
   a print background/threshold | r cycle display (color/mask/both)
 """
 
@@ -1113,6 +1167,16 @@ def main():
     ap.add_argument("--peak-check-area", type=int, default=None,
                     help="only apply --min-peaks above this blob area (px); "
                          "distant people legitimately have one peak")
+    ap.add_argument("--p-filter", action="store_true",
+                    help="start with the p-filter ON: drop blobs with <= "
+                         "--p-min warm centres (toggle live with 'p')")
+    ap.add_argument("--p-min", type=int, default=4,
+                    help="p-filter cutoff: blobs with this many peaks or "
+                         "fewer are removed (default 4)")
+    ap.add_argument("--equip-thresh", type=float, default=3.0,
+                    help="equipment-evidence score above which a blob is "
+                         "rejected in vertical mode (default 3.0; raise to be "
+                         "more permissive, 99 disables)")
     ap.add_argument("--no-static", action="store_true",
                     help="disable static-object suppression (keeps furniture "
                          "and electronics as detections)")
@@ -1177,6 +1241,7 @@ def main():
     suppressor = StaticSuppressor()
     suppressor.enabled = not args.no_static
     cohesion = args.cohesion       # anti-fragmentation strength 0..4
+    p_filter = args.p_filter       # drop blobs with <= p_min warm centres
     view_mode = args.view          # 'vertical' | 'horizontal' | 'any'
     view = 0                       # display style: color / mask / blended
     frame_i = 0
@@ -1210,6 +1275,9 @@ def main():
             min_peaks=args.min_peaks,
             peak_check_area=args.peak_check_area,
             moving=moving,
+            equip_thresh=args.equip_thresh,
+            p_filter=p_filter,
+            p_min=args.p_min,
         )
 
         now = time.time()
@@ -1242,7 +1310,8 @@ def main():
         vis = draw_overlay(base.copy(), dets, bg, thr, eff_sens, is_temp, fps,
                            logging_on, view_mode, cohesion,
                            args.tmin if is_temp else None,
-                           args.tmax if is_temp else None)
+                           args.tmax if is_temp else None,
+                           p_filter, args.p_min)
         cv2.imshow("FLUXNET thermal baseline",
                    cv2.resize(vis, (vis.shape[1] * DISPLAY_SCALE, vis.shape[0] * DISPLAY_SCALE),
                               interpolation=cv2.INTER_NEAREST))
@@ -1287,6 +1356,10 @@ def main():
         elif k in (ord("1"), ord("2"), ord("3")):
             view_mode = VIEW_MODES[k - ord("1")]
             print(f"  mounting mode -> {SHAPE_RULES[view_mode]['label']}")
+        elif k == ord("p"):
+            p_filter = not p_filter
+            print(f"  p-filter {'ON' if p_filter else 'OFF'} "
+                  f"(drops blobs with <= {args.p_min} peaks)")
         elif k == ord("b"):
             suppressor.reset()
             print("  static background reset — relearning")
