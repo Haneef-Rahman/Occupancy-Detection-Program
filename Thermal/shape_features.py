@@ -484,6 +484,105 @@ def projective_features(mask, view="vertical"):
 
 
 # ---------------------------------------------------------------------------
+def body_extension(data, hot_mask, ambient_c, low_delta=2.0, tmax=None,
+                   min_growth=1.6, max_growth=25.0):
+    """
+    Recover the cool, clothed parts of a body that the detection threshold
+    discards, and validate that hot + cool together form a plausible person.
+
+    The problem: a hoodie, jeans or shoes sit only 2-4 C above ambient, well
+    below ambient+4, so only the head and hands survive thresholding. The
+    detection is then a small blob with few warm centres — which the p-filter
+    then removes, discarding a real person.
+
+    The method is the same level-set trick used to identify equipment, run in
+    reverse. Re-threshold at ambient+low_delta, take the warm region that
+    contains the hot blob, and ask whether it is body-shaped:
+
+        equipment : rectangular, convex, rigid, skeleton does not branch
+        body      : elongated, concave, articulated, skeleton BRANCHES
+                    and the hot part sits at one END of it (the head)
+
+    If body-shaped, the expanded region is returned so that peaks, shape and
+    position are recomputed over the WHOLE person. Peak count rises naturally
+    because torso and limbs contribute their own warm centres — which is the
+    point: it lets a real person clear the p-filter on merit rather than by
+    lowering the filter.
+
+    Returns (is_body, expanded_mask, info).
+    """
+    info = {}
+    if hot_mask.sum() == 0:
+        return False, hot_mask, info
+
+    warm = data > (ambient_c + low_delta)
+    if tmax is not None:
+        warm &= data <= tmax
+    warm = warm.astype(np.uint8)
+    warm = cv2.morphologyEx(warm, cv2.MORPH_CLOSE,
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+
+    n, lab = cv2.connectedComponents(warm)
+    if n <= 1:
+        return False, hot_mask, info
+
+    b = hot_mask > 0
+    ids, counts = np.unique(lab[b & (lab > 0)], return_counts=True)
+    if ids.size == 0:
+        return False, hot_mask, info
+    host = (lab == int(ids[np.argmax(counts)])).astype(np.uint8)
+
+    hot_a = float(b.sum())
+    ext_a = float(host.sum())
+    growth = ext_a / max(1.0, hot_a)
+    info["ext_growth"] = growth
+    info["ext_area"] = ext_a
+    if not (min_growth <= growth <= max_growth):
+        return False, hot_mask, info
+
+    cnts, _ = cv2.findContours(host, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not cnts:
+        return False, hot_mask, info
+    c = max(cnts, key=cv2.contourArea)
+    area = float(cv2.contourArea(c))
+    per = float(cv2.arcLength(c, True))
+    if area < 20 or per <= 0:
+        return False, hot_mask, info
+
+    hull = cv2.convexHull(c)
+    ha = float(cv2.contourArea(hull))
+    (_, _), (rw, rh), _ = cv2.minAreaRect(c)
+    rfill = area / (rw * rh) if rw > 1 and rh > 1 else 1.0
+    sol = area / ha if ha > 0 else 1.0
+    info["ext_rect_fill"] = rfill
+    info["ext_solidity"] = sol
+
+    # --- reject the equipment reading of the same region
+    if rfill > 0.80 or sol > 0.94:
+        return False, hot_mask, info
+
+    # --- articulation: a clothed body still branches into limbs
+    topo = skeleton_topology(skeletonize(host))
+    info["ext_endpoints"] = topo["sk_endpoints"]
+    info["ext_junctions"] = topo["sk_junctions"]
+    branched = topo["sk_junctions"] >= 1 or topo["sk_endpoints"] >= 3
+
+    # --- the hot part should sit at one END, as a head does on a body.
+    # Measured as the offset between the hot centroid and the full-region
+    # centroid, in units of the region's own radius — scale-free, so it holds
+    # at any range.
+    ys, xs = np.where(host > 0)
+    hy, hx = np.where(b)
+    d = ((hx.mean() - xs.mean()) ** 2 + (hy.mean() - ys.mean()) ** 2) ** 0.5
+    radius = max(1.0, 0.5 * max(xs.max() - xs.min(), ys.max() - ys.min()))
+    info["ext_offset"] = float(d / radius)
+    peripheral = info["ext_offset"] > 0.18
+
+    is_body = branched and (peripheral or growth > 3.0)
+    info["is_body_like"] = float(is_body)
+    return bool(is_body), (host * 255).astype(np.uint8), info
+
+
 def equipment_score(f):
     """
     Combined evidence that a blob is powered equipment rather than a body.

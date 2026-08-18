@@ -852,7 +852,8 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   min_area=MIN_BLOB_AREA, split=True, min_sep=None,
                   cohesion=1, tmin=None, min_peaks=None, peak_check_area=None,
                   body_min_area=14, body_min_c=29.0, moving=None,
-                  equip_thresh=3.0, p_filter=False, p_min=5):
+                  equip_thresh=3.0, p_filter=False, p_min=5,
+                  body_extend=False, body_delta=2.0):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
 
@@ -1008,14 +1009,51 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             kept.append(d)
         dets = kept
 
+    # ---- BODY EXTENSION (recover clothed torso / legs / feet) ---------------
+    # A hoodie or jeans sits only 2-4 C above ambient, below the detection
+    # threshold, so only the head survives and the blob has too few warm
+    # centres to clear the p-filter. Re-threshold lower, and if the warm region
+    # containing this blob is body-shaped (branching, concave, head at one
+    # end) rather than equipment-shaped (rectangular, rigid), adopt it. Peaks
+    # are then recounted over the whole person and rise on merit.
+    if SF is not None and body_extend and tmin is not None:
+        amb_now = float(np.median(data))
+        grown = []
+        for d in dets:
+            x, y, w, h = d["bbox"]
+            sub = np.zeros(mask.shape, np.uint8)
+            sub[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
+            try:
+                ok, ext, info = SF.body_extension(data, sub, amb_now,
+                                                  low_delta=body_delta, tmax=tmax)
+            except Exception:
+                ok, ext, info = False, sub, {}
+            d["extended"] = bool(ok)
+            d.update({k: float(v) for k, v in info.items()})
+            if ok:
+                ys2, xs2 = np.where(ext > 0)
+                if xs2.size:
+                    x0, y0 = int(xs2.min()), int(ys2.min())
+                    d["bbox"] = (x0, y0, int(xs2.max() - x0 + 1),
+                                 int(ys2.max() - y0 + 1))
+                    d["area_px"] = int(xs2.size)
+                    d["centroid"] = (float(xs2.mean()), float(ys2.mean()))
+                    d["_ext_mask"] = ext          # peaks recounted on this
+            grown.append(d)
+        dets = grown
+
     # Thermal texture is measured on the FINAL body (after merging/clustering),
     # not on individual fragments, so the peak count reflects the whole person.
     binm = mask > 0
     for d in dets:
         x, y, w, h = d["bbox"]
-        sub = np.zeros_like(binm)
-        sub[y:y + h, x:x + w] = binm[y:y + h, x:x + w]
-        ys_, xs_ = np.where(sub)
+        if d.get("_ext_mask") is not None:
+            # count warm centres over the WHOLE body, not just the hot head
+            ys_, xs_ = np.where(d.pop("_ext_mask") > 0)
+        else:
+            sub = np.zeros_like(binm)
+            sub[y:y + h, x:x + w] = binm[y:y + h, x:x + w]
+            ys_, xs_ = np.where(sub)
         if xs_.size:
             npk, sd, rg = thermal_texture(data, ys_, xs_)
         else:
@@ -1120,6 +1158,7 @@ HELP = """
   m MORE cohesion (fewer fragments)   n LESS cohesion (more separation)
   b reset static background   B toggle static suppression on/off
   p toggle P-FILTER (drop blobs with <= --p-min warm centres)
+  x toggle BODY-EXTENSION (recover cool clothed torso/legs)
   a print background/threshold | r cycle display (color/mask/both)
 """
 
@@ -1167,6 +1206,13 @@ def main():
     ap.add_argument("--peak-check-area", type=int, default=None,
                     help="only apply --min-peaks above this blob area (px); "
                          "distant people legitimately have one peak")
+    ap.add_argument("--body-extend", action="store_true",
+                    help="recover cool clothed torso/legs below the detection "
+                         "threshold when they form a body-shaped region "
+                         "(toggle live with 'x')")
+    ap.add_argument("--body-delta", type=float, default=2.0,
+                    help="degrees above ambient used to find clothed body "
+                         "parts (default 2.0)")
     ap.add_argument("--p-filter", action="store_true",
                     help="start with the p-filter ON: drop blobs with <= "
                          "--p-min warm centres (toggle live with 'p')")
@@ -1242,6 +1288,7 @@ def main():
     suppressor.enabled = not args.no_static
     cohesion = args.cohesion       # anti-fragmentation strength 0..4
     p_filter = args.p_filter       # drop blobs with <= p_min warm centres
+    body_extend = args.body_extend # grow detections onto clothed body parts
     view_mode = args.view          # 'vertical' | 'horizontal' | 'any'
     view = 0                       # display style: color / mask / blended
     frame_i = 0
@@ -1278,6 +1325,8 @@ def main():
             equip_thresh=args.equip_thresh,
             p_filter=p_filter,
             p_min=args.p_min,
+            body_extend=body_extend,
+            body_delta=args.body_delta,
         )
 
         now = time.time()
@@ -1356,6 +1405,10 @@ def main():
         elif k in (ord("1"), ord("2"), ord("3")):
             view_mode = VIEW_MODES[k - ord("1")]
             print(f"  mounting mode -> {SHAPE_RULES[view_mode]['label']}")
+        elif k == ord("x"):
+            body_extend = not body_extend
+            print(f"  body-extension {'ON' if body_extend else 'OFF'} "
+                  f"(recovers clothed parts at ambient+{args.body_delta}C)")
         elif k == ord("p"):
             p_filter = not p_filter
             print(f"  p-filter {'ON' if p_filter else 'OFF'} "
