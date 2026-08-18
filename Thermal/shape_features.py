@@ -484,6 +484,133 @@ def projective_features(mask, view="vertical"):
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# OMEGA (head-shoulder) detection
+#
+# After Li, Zhang, Huang & Tan, "Rapid and Robust Human Detection and Tracking
+# Based on Omega-Shape Features", ICIP 2009. Their motivation is exactly ours:
+# "full-body human detection often suffers from occlusions among individuals
+# and scenes in which people are not necessarily standing", and their key
+# observation is that "the head-shoulder part has a distinctive omega-like
+# shape in almost all view angles".
+#
+# Their IMPLEMENTATION is a Viola-Jones cascade followed by a local-HOG
+# AdaBoost classifier — both trained, which we cannot use without importing a
+# training set and the per-site calibration burden that comes with it. The
+# GEOMETRY, however, needs no training: an omega is a raised dome flanked by
+# two outward-flaring slopes, and that is directly measurable on the upper
+# contour of a thermal blob.
+#
+# Why it earns its place alongside body-extension:
+#   * SITTING people have no legs to find, but still have head and shoulders.
+#   * MERGED people produce one blob with TWO domes — so counting omegas
+#     recovers the count that full-body segmentation loses.
+#
+# Note the omega is a forward/oblique-view feature. Directly overhead there is
+# no dome, and the equivalent structure is the concentric head-inside-shoulders
+# already measured by core_frac / core_over_span in projective_features().
+# ---------------------------------------------------------------------------
+def upper_profile(mask):
+    """
+    Height of the silhouette's top edge for each column: h(x).
+
+    The omega lives on the upper contour. Taking the topmost filled pixel per
+    column reduces the 2-D shape to a 1-D curve in which each head becomes a
+    local maximum — which is what makes multi-person counting cheap.
+    """
+    m = (mask > 0)
+    cols = np.where(m.any(axis=0))[0]
+    if cols.size == 0:
+        return None, None
+    top = np.argmax(m[:, cols], axis=0).astype(np.float32)
+    h = (top.max() - top)          # invert: heads become peaks
+    return cols, h
+
+
+def find_omegas(mask, min_prominence=0.22, min_sep_frac=0.18):
+    """
+    Locate head-shoulder omegas on the upper contour.
+
+    Returns a list of dicts: {x, height, width, shoulder_w, ratio, score}.
+    More than one means the blob contains more than one person — the merged
+    case that full-body detection cannot resolve.
+    """
+    cols, h = upper_profile(mask)
+    if cols is None or cols.size < 9:
+        return []
+
+    span = float(cols.max() - cols.min() + 1)
+    hmax = float(h.max())
+    if hmax < 3:
+        return []
+
+    # Smooth, then find domes as local maxima with real prominence, so
+    # boundary noise does not register as a head.
+    k = max(3, int(span * 0.08) | 1)
+    hs = np.convolve(np.pad(h, k, mode="edge"), np.ones(k) / k, mode="same")[k:-k]
+
+    peaks = []
+    for i in range(1, len(hs) - 1):
+        if hs[i] >= hs[i - 1] and hs[i] > hs[i + 1]:
+            # prominence: drop to the lower of the two flanking minima
+            left = hs[:i].min() if i else hs[i]
+            right = hs[i + 1:].min() if i + 1 < len(hs) else hs[i]
+            prom = hs[i] - max(left, right)
+            if prom >= min_prominence * hmax:
+                peaks.append((int(cols[i]), float(hs[i]), float(prom)))
+
+    # Suppress peaks closer than a shoulder-width apart: one head, not two.
+    peaks.sort(key=lambda p: -p[2])
+    kept = []
+    for x, hh, pr in peaks:
+        if all(abs(x - k2[0]) >= min_sep_frac * span for k2 in kept):
+            kept.append((x, hh, pr))
+
+    m = (mask > 0)
+    rows = np.where(m.any(axis=1))[0]
+    if rows.size == 0:
+        return []
+    y0, y1 = int(rows.min()), int(rows.max())
+    height = max(1, y1 - y0 + 1)
+
+    out = []
+    for x, hh, pr in kept:
+        # Head width: the run of columns near this dome that are within 25% of
+        # its height. Shoulder width: the widest row in the band below it.
+        near = np.abs(cols - x) < 0.5 * span
+        dome = near & (hs > hh - 0.25 * hmax)
+        head_w = float(dome.sum())
+
+        band0 = y0 + int(0.18 * height)
+        band1 = y0 + int(0.55 * height)
+        sub = m[band0:max(band0 + 1, band1), :]
+        shoulder_w = float(sub.sum(axis=1).max()) if sub.size else head_w
+
+        ratio = head_w / max(1.0, shoulder_w)
+
+        # Anthropometric gate: head breadth / biacromial breadth ~= 0.38.
+        # Score peaks at that ratio and falls off either side.
+        r_ok = np.exp(-((ratio - ANTHRO["head_over_shoulder"]) ** 2) / (2 * 0.16 ** 2))
+        p_ok = min(1.0, pr / (0.35 * hmax))          # dome distinctness
+        f_ok = 1.0 if shoulder_w > head_w else 0.4   # shoulders must flare out
+        score = float(r_ok * p_ok * f_ok)
+
+        out.append(dict(x=int(x), height=float(hh), prominence=float(pr),
+                        head_w=head_w, shoulder_w=shoulder_w,
+                        ratio=float(ratio), score=score))
+    out.sort(key=lambda d: -d["score"])
+    return out
+
+
+def omega_score(mask):
+    """Best single omega match for a blob, plus how many were found."""
+    om = find_omegas(mask)
+    if not om:
+        return dict(omega_score=0.0, omega_count=0, omega_ratio=0.0)
+    return dict(omega_score=om[0]["score"], omega_count=len(om),
+                omega_ratio=om[0]["ratio"])
+
+
 def body_extension(data, hot_mask, ambient_c, low_delta=2.0, tmax=None,
                    min_growth=1.6, max_growth=25.0):
     """
@@ -654,6 +781,10 @@ def extract(data, mask, ambient_c, view="vertical", context=True,
     f.update(projective_features(mask, view))
     if context:
         f.update(thermal_context(data, mask, ambient_c, low_delta, tmax))
+    # Omega is a forward/oblique-view feature; directly overhead the analogous
+    # structure is the concentric core already measured in projective_features.
+    if view in ("horizontal", "any"):
+        f.update(omega_score(mask))
     return f
 
 
@@ -675,4 +806,6 @@ FEATURE_ORDER = [
     "ctx_area", "ctx_growth", "ctx_solidity", "ctx_rect_fill",
     "ctx_compactness", "ctx_circular_var", "ctx_elliptic_var",
     "is_equipment_like",
+    # omega (head-shoulder)
+    "omega_score", "omega_count", "omega_ratio",
 ]
