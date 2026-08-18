@@ -177,14 +177,14 @@ SHAPE_RULES = {
                        cluster_small=False, small_area=0, cluster_radius=0,
                        delta=4.0, min_peaks=3, peak_check_area=150,
                        surface="skin",       # forward you see faces/hands
-                       reject_equipment=False,
+                       reject_equipment=True,
                        label="HORIZ (fwd)"),
     "any":        dict(aspect_min=0.30, aspect_max=7.0, extent_min=0.20,
                        merge_axis="vertical",
                        min_sep_px=0,
                        cluster_small=False, small_area=0, cluster_radius=0,
                        delta=4.0, min_peaks=3, peak_check_area=150,
-                       surface="skin", reject_equipment=False,
+                       surface="skin", reject_equipment=True,
                        label="ANY"),
 }
 
