@@ -1060,6 +1060,19 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             npk, sd, rg = 1, 0.0, 0.0
         d["peaks"], d["std_c"], d["range_c"] = int(npk), float(sd), float(rg)
 
+        # head-shoulder omegas, for the capture overlay and for counting
+        if SF is not None and view in ("horizontal", "any"):
+            x, y, w, h = d["bbox"]
+            sub = np.zeros(mask.shape, np.uint8)
+            sub[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
+            try:
+                oms = SF.find_omegas(sub)
+            except Exception:
+                oms = []
+            d["omegas"] = oms
+            d["omega_count"] = len(oms)
+            d["omega_score"] = float(oms[0]["score"]) if oms else 0.0
+
     # Single-hot-object rejection.
     #
     # Measured on real captures vs synthetic objects:
@@ -1108,10 +1121,38 @@ def colorize(data):
     return cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_INFERNO)
 
 
-def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any", cohesion=1,
-                 band_lo=None, band_hi=None, p_filter=False, p_min=5):
-    unit = "C" if is_temp else ""
+def draw_omega(vis, dets):
+    """
+    Mark head-shoulder omegas: a dome arc at the head with the shoulder span
+    beneath it. Drawn instead of the body box so a capture session shows only
+    what the omega detector is asserting.
+    """
     for d in dets:
+        for om in d.get("omegas", []):
+            x = int(om["x"])
+            bx, by, bw, bh = d["bbox"]
+            hw = max(2, int(om["head_w"] / 2))
+            sw = max(3, int(om["shoulder_w"] / 2))
+            top = by
+            # head dome
+            cv2.ellipse(vis, (x, top + hw), (hw, hw), 0, 180, 360,
+                        (0, 220, 255), 1)
+            # shoulder flare
+            cv2.line(vis, (x - hw, top + hw), (x - sw, top + 2 * hw),
+                     (0, 220, 255), 1)
+            cv2.line(vis, (x + hw, top + hw), (x + sw, top + 2 * hw),
+                     (0, 220, 255), 1)
+            cv2.putText(vis, f"{om['score']:.2f}", (x - 10, max(7, top - 2)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.26, (0, 220, 255), 1,
+                        cv2.LINE_AA)
+    return vis
+
+
+def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any", cohesion=1,
+                 band_lo=None, band_hi=None, p_filter=False, p_min=5,
+                 show_boxes=True):
+    unit = "C" if is_temp else ""
+    for d in (dets if show_boxes else []):
         x, y, w, h = d["bbox"]
         pri = d.get("priority", False)
         col = (0, 255, 255) if pri else (0, 255, 0)   # yellow = skin priority
@@ -1159,6 +1200,7 @@ HELP = """
   b reset static background   B toggle static suppression on/off
   p toggle P-FILTER (drop blobs with <= --p-min warm centres)
   x toggle BODY-EXTENSION (recover cool clothed torso/legs)
+  c START/STOP continuous capture  |  o body boxes on/off  |  O omega on/off
   a print background/threshold | r cycle display (color/mask/both)
 """
 
@@ -1206,6 +1248,11 @@ def main():
     ap.add_argument("--peak-check-area", type=int, default=None,
                     help="only apply --min-peaks above this blob area (px); "
                          "distant people legitimately have one peak")
+    ap.add_argument("--capture-every", type=int, default=1,
+                    help="during capture, save every Nth frame (default 1)")
+    ap.add_argument("--omega-only", action="store_true",
+                    help="start with body boxes hidden and only the omega "
+                         "overlay drawn — the capture view")
     ap.add_argument("--body-extend", action="store_true",
                     help="recover cool clothed torso/legs below the detection "
                          "threshold when they form a body-shaped region "
@@ -1284,6 +1331,17 @@ def main():
                  "extent", "peaks", "std_c", "skin_px", "priority", "note"])
 
     logging_on = False
+    # Continuous capture: one keypress starts it, frames stream to disk with a
+    # manifest. Building a few thousand training frames by pressing 's' is not
+    # realistic; recording a walk-through and letting it run is.
+    capture_on = False
+    capture_n = 0
+    capture_dir = None
+    capture_manifest = None
+    capture_writer = None
+    show_boxes = not args.omega_only
+    show_omega = True
+
     suppressor = StaticSuppressor()
     suppressor.enabled = not args.no_static
     cohesion = args.cohesion       # anti-fragmentation strength 0..4
@@ -1354,13 +1412,33 @@ def main():
 
         color = colorize(data)
         maskc = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        # ---- continuous capture ------------------------------------------
+        if capture_on and frame_i % max(1, args.capture_every) == 0:
+            fn = f"cap_{capture_n:06d}"
+            np.save(os.path.join(capture_dir, fn + ".npy"), data)
+            if capture_writer:
+                capture_writer.writerow([
+                    fn, datetime.now().isoformat(timespec="milliseconds"),
+                    view_mode, f"{bg:.2f}", f"{thr:.2f}", len(dets),
+                    sum(d.get("omega_count", 0) for d in dets),
+                    max([d.get("omega_score", 0.0) for d in dets], default=0.0),
+                    args.note,
+                ])
+            capture_n += 1
+
         base = color if view == 0 else (maskc if view == 1 else
                                         cv2.addWeighted(color, 0.7, maskc, 0.3, 0))
         vis = draw_overlay(base.copy(), dets, bg, thr, eff_sens, is_temp, fps,
                            logging_on, view_mode, cohesion,
                            args.tmin if is_temp else None,
                            args.tmax if is_temp else None,
-                           p_filter, args.p_min)
+                           p_filter, args.p_min, show_boxes)
+        if show_omega:
+            vis = draw_omega(vis, dets)
+        if capture_on:
+            cv2.circle(vis, (vis.shape[1] - 8, 20), 4, (0, 0, 255), -1)
+            cv2.putText(vis, f"REC {capture_n}", (vis.shape[1] - 52, 34),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.28, (0, 0, 255), 1, cv2.LINE_AA)
         cv2.imshow("FLUXNET thermal baseline",
                    cv2.resize(vis, (vis.shape[1] * DISPLAY_SCALE, vis.shape[0] * DISPLAY_SCALE),
                               interpolation=cv2.INTER_NEAREST))
@@ -1405,6 +1483,30 @@ def main():
         elif k in (ord("1"), ord("2"), ord("3")):
             view_mode = VIEW_MODES[k - ord("1")]
             print(f"  mounting mode -> {SHAPE_RULES[view_mode]['label']}")
+        elif k == ord("c"):
+            capture_on = not capture_on
+            if capture_on:
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                capture_dir = os.path.join(LOG_DIR, f"capture_{stamp}")
+                os.makedirs(capture_dir, exist_ok=True)
+                capture_manifest = open(os.path.join(capture_dir, "manifest.csv"),
+                                        "w", newline="")
+                capture_writer = csv.writer(capture_manifest)
+                capture_writer.writerow(["file", "timestamp", "view", "background",
+                                         "threshold", "n_det", "omega_count",
+                                         "omega_score", "note"])
+                capture_n = 0
+                print(f"  RECORDING -> {capture_dir}  (press c again to stop)")
+            else:
+                if capture_manifest:
+                    capture_manifest.close()
+                print(f"  recording stopped: {capture_n} frames in {capture_dir}")
+        elif k == ord("o"):
+            show_boxes = not show_boxes
+            print(f"  body boxes {'ON' if show_boxes else 'OFF'}")
+        elif k == ord("O"):
+            show_omega = not show_omega
+            print(f"  omega overlay {'ON' if show_omega else 'OFF'}")
         elif k == ord("x"):
             body_extend = not body_extend
             print(f"  body-extension {'ON' if body_extend else 'OFF'} "
@@ -1422,6 +1524,9 @@ def main():
         elif k == ord("h"):
             print(HELP)
 
+    if capture_manifest:
+        capture_manifest.close()
+        print(f"capture: {capture_n} frames in {capture_dir}")
     fcsv.close()
     cam.release()
     cv2.destroyAllWindows()
