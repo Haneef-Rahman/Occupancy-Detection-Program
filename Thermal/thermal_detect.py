@@ -157,6 +157,11 @@ MAX_EXTENT = 0.82
 # This is the one that actually catches a laptop lying at an angle.
 MAX_RECT_FILL = 0.86
 DISPLAY_SCALE = 6      # overridden by --scale
+
+# Fixed span for --capture-png-raw. A per-frame stretch would make the same
+# scene encode differently from one frame to the next, which is exactly the
+# nuisance variation a learned model must not be taught.
+PNG_SPAN_C = (15.0, 45.0)
 LOG_DIR = "logs"
 
 # Two mounting geometries, switchable live with the 'v' key (and later
@@ -1661,6 +1666,16 @@ def main():
                          "distant people legitimately have one peak")
     ap.add_argument("--kalman", action="store_true",
                     help="start with Kalman tracking on (toggle with 'f')")
+    ap.add_argument("--capture-review", action="store_true",
+                    help="also write review/ with boxes drawn, for eyeballing "
+                         "the auto-labels. Never feed review/ to a trainer.")
+    ap.add_argument("--capture-png-overlay", action="store_true",
+                    help="save the annotated display instead of a clean frame "
+                         "(demo footage, NOT training data)")
+    ap.add_argument("--capture-png-raw", action="store_true",
+                    help="save 16-bit linear PNGs over a fixed temperature span "
+                         "instead of a colour map — preserves the radiometry, "
+                         "recommended if the model should see temperature")
     ap.add_argument("--capture-every", type=int, default=1,
                     help="during capture, save every Nth frame (default 1)")
     ap.add_argument("--scale", type=int, default=DISPLAY_SCALE,
@@ -1954,7 +1969,63 @@ def main():
         # ---- continuous capture ------------------------------------------
         if capture_on and frame_i % max(1, args.capture_every) == 0:
             fn = f"cap_{capture_n:06d}"
-            np.save(os.path.join(capture_dir, fn + ".npy"), data)
+            np.save(os.path.join(capture_dir, "npy", fn + ".npy"), data)
+
+            # PNG for the learned branch — CLEAN. No boxes, no text, no
+            # sidebar, no omega arc, no upscaling. Detection training takes a
+            # clean image plus a separate label file; a box drawn into the
+            # pixels teaches the network to find rectangles and cannot be read
+            # by any standard pipeline.
+            if args.capture_png_overlay:
+                png = vis
+            elif args.capture_png_raw:
+                # 16-bit linear over a FIXED span, so a pixel value means the
+                # same temperature across the whole dataset. The live palette is
+                # percentile-stretched per frame, which is exactly the nuisance
+                # variation a model must not be taught.
+                lo, hi = PNG_SPAN_C
+                png = (np.clip((data - lo) / (hi - lo), 0, 1) * 65535).astype(np.uint16)
+            else:
+                png = colorize(data)
+            cv2.imwrite(os.path.join(capture_dir, "png", fn + ".png"), png)
+
+            # YOLO labels: "<class> <cx> <cy> <w> <h>", all normalised 0-1.
+            #   class 0 = person        (full body blob)
+            #   class 1 = head_shoulder (the omega region, if one was found)
+            # Two classes rather than one because the omega box is a genuinely
+            # different target from the body box, and which one a model should
+            # learn is an open question worth keeping both options for.
+            IH, IW = data.shape[:2]
+            lines = []
+            for de in dets:
+                bx, by, bw, bh = de["bbox"]
+                lines.append(f"0 {(bx + bw / 2) / IW:.6f} {(by + bh / 2) / IH:.6f} "
+                             f"{bw / IW:.6f} {bh / IH:.6f}")
+                for om in de.get("omegas", []):
+                    hb = om.get("head_box")
+                    if not hb:
+                        continue
+                    hx, hy, hw_, hh_ = hb
+                    lines.append(f"1 {(hx + hw_ / 2) / IW:.6f} {(hy + hh_ / 2) / IH:.6f} "
+                                 f"{hw_ / IW:.6f} {hh_ / IH:.6f}")
+            with open(os.path.join(capture_dir, "labels", fn + ".txt"), "w") as fh:
+                fh.write("\n".join(lines) + ("\n" if lines else ""))
+
+            # Optional QA copy with the boxes drawn, kept OUT of png/ so it can
+            # never be fed to a trainer by accident.
+            if args.capture_review:
+                rv = cv2.resize(colorize(data), (IW * 3, IH * 3),
+                                interpolation=cv2.INTER_NEAREST)
+                for de in dets:
+                    bx, by, bw, bh = [q * 3 for q in de["bbox"]]
+                    cv2.rectangle(rv, (bx, by), (bx + bw, by + bh), (0, 255, 0), 1)
+                    for om in de.get("omegas", []):
+                        hb = om.get("head_box")
+                        if hb:
+                            hx, hy, hw_, hh_ = [q * 3 for q in hb]
+                            cv2.rectangle(rv, (hx, hy), (hx + hw_, hy + hh_),
+                                          (0, 220, 255), 1)
+                cv2.imwrite(os.path.join(capture_dir, "review", fn + ".png"), rv)
             if capture_writer:
                 capture_writer.writerow([
                     fn, datetime.now().isoformat(timespec="milliseconds"),
@@ -2046,7 +2117,12 @@ def main():
             if capture_on:
                 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 capture_dir = os.path.join(LOG_DIR, f"capture_{stamp}")
-                os.makedirs(capture_dir, exist_ok=True)
+                for sub in ("npy", "png", "labels"):
+                    os.makedirs(os.path.join(capture_dir, sub), exist_ok=True)
+                if args.capture_review:
+                    os.makedirs(os.path.join(capture_dir, "review"), exist_ok=True)
+                with open(os.path.join(capture_dir, "classes.txt"), "w") as fh:
+                    fh.write("person\nhead_shoulder\n")
                 capture_manifest = open(os.path.join(capture_dir, "manifest.csv"),
                                         "w", newline="")
                 capture_writer = csv.writer(capture_manifest)
