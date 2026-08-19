@@ -5,7 +5,7 @@ without cameras, microphones, or per-site training.
 
 Sensing is done with **mmWave radar** (motion, breathing micro-motion),
 a **radiometric thermal camera** (body heat), and a **dToF SPAD depth sensor**
-(head/shoulder separation). No modality can capture an identifiable image —
+(head/shoulder valley separation). No modality can capture an identifiable image —
 privacy is a property of the physics, not of a policy.
 
 ![FLUXNET thermal person detection](docs/hero_thermal_detection.png)
