@@ -8,6 +8,16 @@ a **radiometric thermal camera** (body heat), and a **dToF SPAD depth sensor**
 (head/shoulder separation). No modality can capture an identifiable image —
 privacy is a property of the physics, not of a policy.
 
+![FLUXNET thermal person detection](docs/hero_thermal_detection.png)
+
+*Live output from the classical thermal detector. Every detection traces to a
+temperature and a shape — no weights, no training set, no per-site calibration.
+The warm square in frame is rejected on every frame because a body radiates from
+several places at once and a heat source radiates from one. Measured over 332
+frames: **94.0 % recall, 96.9 % precision**, and clutter false positives reduced
+from 209 to 0 against the same run without the warm-centre filter. Reproduce it
+from [`Thermal/datasets/`](Thermal/datasets/).*
+
 ## Repository layout
 
 | Folder | Contents |
