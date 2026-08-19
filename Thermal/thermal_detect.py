@@ -883,7 +883,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   body_min_area=14, body_min_c=29.0, moving=None,
                   equip_thresh=3.0, p_filter=False, p_min=5,
                   body_extend=False, body_delta=2.0, flags=None,
-                 omega_scale_ratio=0.40):
+                  omega_scale_ratio=0.40, omega_delta=2.0):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
 
@@ -1054,6 +1054,9 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             kept.append(d)
         dets = kept
 
+    amb_now = float(np.median(data))
+    _warm_lbl = [None]        # warm-silhouette labelling, computed on demand
+
     # ---- BODY EXTENSION (recover clothed torso / legs / feet) ---------------
     # A hoodie or jeans sits only 2-4 C above ambient, below the detection
     # threshold, so only the head survives and the blob has too few warm
@@ -1062,7 +1065,6 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
     # end) rather than equipment-shaped (rectangular, rigid), adopt it. Peaks
     # are then recounted over the whole person and rise on merit.
     if SF is not None and body_extend and tmin is not None:
-        amb_now = float(np.median(data))
         grown = []
         for d in dets:
             x, y, w, h = d["bbox"]
@@ -1105,13 +1107,36 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             npk, sd, rg = 1, 0.0, 0.0
         d["peaks"], d["std_c"], d["range_c"] = int(npk), float(sd), float(rg)
 
-        # head-shoulder omegas, for the capture overlay and for counting
+        # Head-shoulder omegas.
+        #
+        # Fitted to the WARM silhouette (ambient + omega_delta), not the hot
+        # detection mask. Hair and scalp are 3-6 C cooler than the face, and
+        # clothed shoulders cooler still, so the head-and-shoulder OUTLINE only
+        # exists in the warm mask. The hot face is then the anchor that must
+        # sit inside the dome — which is what a laptop cannot reproduce.
         if SF is not None and F["omega"] and view in ("horizontal", "any"):
             x, y, w, h = d["bbox"]
-            sub = np.zeros(mask.shape, np.uint8)
-            sub[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
+            hot_sub = np.zeros(mask.shape, np.uint8)
+            hot_sub[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
+            # The warm silhouette must be the WHOLE connected warm body, not a
+            # padded crop of the hot head — otherwise the shoulder measurement
+            # is taken across the head itself and the ratio is meaningless.
+            if _warm_lbl[0] is None:
+                wlo = amb_now + omega_delta
+                wm = ((data >= wlo) & (data <= tmax)) if tmax is not None \
+                    else (data >= wlo)
+                wm = cv2.morphologyEx(wm.astype(np.uint8), cv2.MORPH_CLOSE,
+                                      np.ones((3, 3), np.uint8))
+                _warm_lbl[0] = cv2.connectedComponents(wm)[1]
+            lbl = _warm_lbl[0]
+            ids, cnt = np.unique(lbl[hot_sub > 0], return_counts=True)
+            keep = [i for i in ids[np.argsort(-cnt)] if i != 0]
+            if keep:
+                warm_sub = (lbl == keep[0]).astype(np.uint8) * 255
+            else:
+                warm_sub = hot_sub
             try:
-                oms = SF.find_omegas(sub)
+                oms = SF.find_omegas_thermal(warm_sub, hot_sub)
             except Exception:
                 oms = []
             d["omegas"] = oms
@@ -1178,26 +1203,92 @@ def colorize(data):
 
 def draw_omega(vis, dets, S=1):
     """
-    Mark head-shoulder omegas: a dome arc at the head with the shoulder span
-    beneath it, drawn on the UPSCALED canvas so the arc is smooth and the
-    score is legible. All sensor-space coordinates are multiplied by S.
+    Draw the omega on the anatomy it actually describes:
+
+      * dome    -> the HEAD, traced on the warm silhouette (hair/scalp)
+      * legs    -> the SHOULDERS, flaring out and down from the dome
+      * marker  -> the HOT FACE, which must sit inside the dome
+
+    Previously the dome was drawn around the face because it was fitted to the
+    hot mask. The face is a patch within the head, not its outline.
     """
     for d in dets:
         for om in d.get("omegas", []):
             x = int(om["x"]) * S
-            bx, by, bw, bh = d["bbox"]
             hw = max(2, int(om["head_w"] / 2)) * S
             sw = max(3, int(om["shoulder_w"] / 2)) * S
-            top = by * S
-            cv2.ellipse(vis, (x, top + hw), (hw, hw), 0, 180, 360,
+
+            hb = om.get("head_box")
+            if hb:
+                bx, by, bw, bh = [v * S for v in hb]
+                cxh, cyh = bx + bw // 2, by + bh // 2
+                ax, ay = max(3, bw // 2), max(3, bh // 2)
+            else:
+                cxh, cyh, ax, ay = x, (d["bbox"][1] * S) + hw, hw, hw
+
+            # head dome: upper half-ellipse over the scalp
+            cv2.ellipse(vis, (cxh, cyh), (ax, ay), 0, 180, 360,
                         (0, 220, 255), 2, cv2.LINE_AA)
-            cv2.line(vis, (x - hw, top + hw), (x - sw, top + 2 * hw),
-                     (0, 220, 255), 2, cv2.LINE_AA)
-            cv2.line(vis, (x + hw, top + hw), (x + sw, top + 2 * hw),
-                     (0, 220, 255), 2, cv2.LINE_AA)
-            cv2.putText(vis, f"{om['score']:.2f}", (x - 14, max(14, top - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1,
-                        cv2.LINE_AA)
+            # shoulder legs: from the dome's sides, out and down
+            cv2.line(vis, (cxh - ax, cyh), (cxh - sw, cyh + ay), (0, 220, 255), 2, cv2.LINE_AA)
+            cv2.line(vis, (cxh + ax, cyh), (cxh + sw, cyh + ay), (0, 220, 255), 2, cv2.LINE_AA)
+            # shoulder line
+            cv2.line(vis, (cxh - sw, cyh + ay), (cxh + sw, cyh + ay),
+                     (0, 180, 210), 1, cv2.LINE_AA)
+
+            # the hot face anchor, inside the dome
+            if "core_x" in om:
+                cv2.drawMarker(vis, (int(om["core_x"] * S), int(om["core_y"] * S)),
+                               (60, 60, 255), cv2.MARKER_TILTED_CROSS, 12, 2)
+
+            lbl = f"{om['score']:.2f}"
+            cv2.putText(vis, lbl, (cxh - 16, max(14, cyh - ay - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(vis, lbl, (cxh - 16, max(14, cyh - ay - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
+    return vis
+
+
+def draw_probe(vis, data, mx, my, S, is_temp):
+    """
+    Cursor temperature probe.
+
+    Reads the raw sensor array, not the colourised image: the palette is
+    re-normalised per frame by percentile, so identical colours mean different
+    temperatures from one frame to the next. Only the underlying value is
+    trustworthy, and being able to point at hair, face and coat and read the
+    actual numbers is how the coupling constants get checked against reality
+    rather than assumed.
+
+    Reports the 3x3 mean alongside the pixel value — single Lepton pixels are
+    noisy (~50 mK NETD) and the neighbourhood mean is the more honest figure.
+    """
+    if mx is None:
+        return vis
+    sx, sy = mx // S, my // S
+    if not (0 <= sx < data.shape[1] and 0 <= sy < data.shape[0]):
+        return vis
+    v = float(data[sy, sx])
+    y0, y1 = max(0, sy - 1), min(data.shape[0], sy + 2)
+    x0, x1 = max(0, sx - 1), min(data.shape[1], sx + 2)
+    v3 = float(data[y0:y1, x0:x1].mean())
+
+    px, py = sx * S + S // 2, sy * S + S // 2
+    cv2.line(vis, (px, 0), (px, vis.shape[0]), (200, 200, 200), 1)
+    cv2.line(vis, (0, py), (vis.shape[1], py), (200, 200, 200), 1)
+    cv2.rectangle(vis, (sx * S, sy * S), (sx * S + S, sy * S + S), (0, 255, 255), 2)
+
+    unit = "C" if is_temp else ""
+    txt = f"{v:.2f}{unit}  3x3 {v3:.2f}{unit}" if is_temp else f"{v:.0f}  3x3 {v3:.0f}"
+    sub = f"px ({sx},{sy})"
+    tx = min(px + 14, vis.shape[1] - 210)
+    ty = max(28, py - 14)
+    cv2.rectangle(vis, (tx - 6, ty - 20), (tx + 200, ty + 16), (16, 16, 20), -1)
+    cv2.rectangle(vis, (tx - 6, ty - 20), (tx + 200, ty + 16), (0, 255, 255), 1)
+    cv2.putText(vis, txt, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
+                (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(vis, sub, (tx, ty + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
+                (170, 170, 175), 1, cv2.LINE_AA)
     return vis
 
 
@@ -1253,7 +1344,8 @@ def _rule(img, y, label=None):
 
 def draw_sidebar(h, dets, bg, thr, sens, is_temp, fps, logging_on, view,
                  cohesion, band_lo, band_hi, p_min, flags, show_boxes,
-                 show_omega, capture_on, capture_n, tracking):
+                 show_omega, capture_on, capture_n, tracking,
+                 probe_on=False, probe_xy=None, data=None, probe_temp=True):
     """
     Status panel rendered at native display resolution.
 
@@ -1310,10 +1402,22 @@ def draw_sidebar(h, dets, bg, thr, sens, is_temp, fps, logging_on, view,
     _rule(sb, y, "DISPLAY")
     y += 20
     for lab, on, kkey in (("boxes", show_boxes, "o"), ("omega", show_omega, "O"),
-                          ("logging", logging_on, "l")):
+                          ("probe", probe_on, "T"), ("logging", logging_on, "l")):
         _line(sb, y, f"{kkey}  {lab}", _C_TEXT if on else _C_OFF, sc=0.40)
         _line(sb, y, "ON" if on else "off", _C_ON if on else _C_OFF, x=240, sc=0.40)
         y += 17
+
+    if probe_on and probe_xy and data is not None and probe_xy.get("x") is not None:
+        sx = probe_xy["x"] // DISPLAY_SCALE
+        sy = probe_xy["y"] // DISPLAY_SCALE
+        if 0 <= sx < data.shape[1] and 0 <= sy < data.shape[0]:
+            y += 6
+            v = float(data[sy, sx])
+            _line(sb, y, f"probe  {v:.2f}" + ("C" if probe_temp else ""),
+                  (0, 255, 255), sc=0.48)
+            y += 16
+            _line(sb, y, f"({sx},{sy})", _C_DIM, sc=0.38)
+            y += 8
 
     if capture_on:
         y += 6
@@ -1357,6 +1461,8 @@ HELP = """
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
     z Omega      j OmScale    f Kalman     B StaticSup
+
+  T cursor TEMPERATURE PROBE (hover to read the exact pixel value)
   a print background/threshold | r cycle display (color/mask/both)
 """
 
@@ -1408,6 +1514,13 @@ def main():
                     help="start with Kalman tracking on (toggle with 'f')")
     ap.add_argument("--capture-every", type=int, default=1,
                     help="during capture, save every Nth frame (default 1)")
+    ap.add_argument("--probe", action="store_true",
+                    help="start with the cursor temperature probe on "
+                         "(toggle with 'T')")
+    ap.add_argument("--omega-delta", type=float, default=2.0,
+                    help="degrees above ambient defining the WARM silhouette "
+                         "the omega is fitted to (hair/scalp + clothed "
+                         "shoulders). The hot face anchors it from inside.")
     ap.add_argument("--omega-scale-ratio", type=float, default=0.40,
                     help="omegas narrower than this fraction of the frame's "
                          "largest confident omega are discarded (toggle 'j'). "
@@ -1500,6 +1613,17 @@ def main():
     flags["static"] = not args.no_static
     tracker = MultiTracker() if MultiTracker else None
 
+    # cursor probe state, filled by the OpenCV mouse callback
+    probe_on = args.probe
+    probe_xy = {"x": None, "y": None}
+
+    def _on_mouse(event, mxx, myy, fl, param):
+        probe_xy["x"], probe_xy["y"] = mxx, myy
+
+    WIN = "FLUXNET thermal baseline"
+    cv2.namedWindow(WIN, cv2.WINDOW_AUTOSIZE)
+    cv2.setMouseCallback(WIN, _on_mouse)
+
     logging_on = False
     # Continuous capture: one keypress starts it, frames stream to disk with a
     # manifest. Building a few thousand training frames by pressing 's' is not
@@ -1555,6 +1679,7 @@ def main():
             body_delta=args.body_delta,
             flags=flags,
             omega_scale_ratio=args.omega_scale_ratio,
+            omega_delta=args.omega_delta,
         )
 
         # ---- Kalman tracking -------------------------------------------
@@ -1621,17 +1746,20 @@ def main():
                            show_ids=flags["kalman"])
         if show_omega:
             frame = draw_omega(frame, dets, S)
+        if probe_on:
+            frame = draw_probe(frame, data, probe_xy["x"], probe_xy["y"], S, is_temp)
 
         sb = draw_sidebar(frame.shape[0], dets, bg, thr, eff_sens, is_temp, fps,
                           logging_on, view_mode, cohesion,
                           args.tmin if is_temp else None,
                           args.tmax if is_temp else None,
                           args.p_min, flags, show_boxes, show_omega,
-                          capture_on, capture_n, flags["kalman"])
+                          capture_on, capture_n, flags["kalman"],
+                          probe_on, probe_xy, data, is_temp)
         vis = np.hstack([frame, sb])
         if capture_on:
             cv2.circle(vis, (frame.shape[1] - 18, 18), 7, (0, 0, 255), -1)
-        cv2.imshow("FLUXNET thermal baseline", vis)
+        cv2.imshow(WIN, vis)
 
         k = cv2.waitKey(1) & 0xFF
         if k in (ord("q"), 27):
@@ -1694,6 +1822,9 @@ def main():
         elif k == ord("o"):
             show_boxes = not show_boxes
             print(f"  body boxes {'ON' if show_boxes else 'OFF'}")
+        elif k == ord("T"):
+            probe_on = not probe_on
+            print(f"  cursor probe {'ON' if probe_on else 'OFF'}")
         elif k == ord("O"):
             show_omega = not show_omega
             print(f"  omega overlay {'ON' if show_omega else 'OFF'}")

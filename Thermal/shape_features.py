@@ -611,6 +611,134 @@ def omega_score(mask):
                 omega_ratio=om[0]["ratio"])
 
 
+def find_omegas_thermal(warm_mask, hot_mask, min_prominence=0.22,
+                        min_sep_frac=0.18, min_core_frac=0.04,
+                        max_rect_fill=0.86):
+    """
+    Omega fitted to the THERMAL SILHOUETTE, with the hot face as the anchor.
+
+    The earlier version ran on the detection mask, which contains only the
+    hottest pixels — so the "head" dome traced the outline of the face. That is
+    geometrically wrong. The face is not the head: it is a patch in the middle
+    of it. Hair and scalp sit several degrees cooler than skin but still well
+    above ambient, and clothed shoulders cooler still, so the true
+    head-and-shoulder outline only exists in the WARM mask.
+
+    Correct construction, and what this function enforces:
+
+        * the dome is found on the warm silhouette  -> follows hair/scalp
+        * the omega legs flare onto the warm shoulders (clothing)
+        * the HOT region (face) must sit INSIDE the dome, near its centre
+
+    That last condition is also the equipment rejector. A laptop's warm
+    silhouette is a rectangle: its upper profile is flat, so no dome clears the
+    prominence test; and where a dome is forced by noise, the hot patch is a
+    slab filling the width rather than a compact core under an arch. Two
+    independent reasons it fails, both structural rather than tuned.
+
+    Returns the same dict shape as find_omegas, plus core_x/core_y/core_frac.
+    """
+    cols, h = upper_profile(warm_mask)
+    if cols is None or cols.size < 9:
+        return []
+
+    span = float(cols.max() - cols.min() + 1)
+    hmax = float(h.max())
+    if hmax < 3:
+        return []
+
+    W = (warm_mask > 0)
+    H_ = (hot_mask > 0)
+    if not H_.any():
+        return []
+
+    # A rectangular warm silhouette is furniture or equipment, not a torso.
+    ys_w, xs_w = np.where(W)
+    fill = W.sum() / max(1.0, float((ys_w.max() - ys_w.min() + 1) *
+                                    (xs_w.max() - xs_w.min() + 1)))
+    if fill > max_rect_fill:
+        return []
+
+    k = max(3, int(span * 0.08) | 1)
+    hs = np.convolve(np.pad(h, k, mode="edge"), np.ones(k) / k, mode="same")[k:-k]
+
+    peaks = []
+    for i in range(1, len(hs) - 1):
+        if hs[i] >= hs[i - 1] and hs[i] > hs[i + 1]:
+            left = hs[:i].min() if i else hs[i]
+            right = hs[i + 1:].min() if i + 1 < len(hs) else hs[i]
+            prom = hs[i] - max(left, right)
+            if prom >= min_prominence * hmax:
+                peaks.append((int(cols[i]), float(hs[i]), float(prom)))
+
+    peaks.sort(key=lambda p: -p[2])
+    kept = []
+    for x, hh, pr in peaks:
+        if all(abs(x - k2[0]) >= min_sep_frac * span for k2 in kept):
+            kept.append((x, hh, pr))
+
+    rows = np.where(W.any(axis=1))[0]
+    if rows.size == 0:
+        return []
+    y0, y1 = int(rows.min()), int(rows.max())
+    height = max(1, y1 - y0 + 1)
+
+    out = []
+    for x, hh, pr in kept:
+        near = np.abs(cols - x) < 0.5 * span
+        dome = near & (hs > hh - 0.25 * hmax)
+        head_w = float(dome.sum())
+        if head_w < 3:
+            continue
+
+        # Head box: the dome's horizontal span, one head-breadth deep from the
+        # silhouette top beneath it.
+        hx0 = int(max(0, x - head_w / 2))
+        hx1 = int(min(W.shape[1], x + head_w / 2 + 1))
+        colstop = np.argmax(W[:, hx0:hx1], axis=0)
+        valid = W[:, hx0:hx1].any(axis=0)
+        if not valid.any():
+            continue
+        hy0 = int(colstop[valid].min())
+        hy1 = int(min(W.shape[0], hy0 + max(4, head_w * 1.25)))
+
+        # THE ANCHOR: hot pixels inside the head box = the face.
+        head_area = max(1.0, float((hx1 - hx0) * (hy1 - hy0)))
+        core = H_[hy0:hy1, hx0:hx1]
+        core_n = float(core.sum())
+        core_frac = core_n / head_area
+        if core_frac < min_core_frac:
+            continue                      # a dome with no warm face under it
+
+        cys, cxs = np.where(core)
+        core_x = float(cxs.mean()) + hx0
+        core_y = float(cys.mean()) + hy0
+        # face should sit near the dome's axis, not off to one side
+        offset = abs(core_x - x) / max(1.0, head_w / 2)
+        if offset > 1.0:
+            continue
+
+        band0 = y0 + int(0.18 * height)
+        band1 = y0 + int(0.55 * height)
+        sub = W[band0:max(band0 + 1, band1), :]
+        shoulder_w = float(sub.sum(axis=1).max()) if sub.size else head_w
+        ratio = head_w / max(1.0, shoulder_w)
+
+        r_ok = np.exp(-((ratio - ANTHRO["head_over_shoulder"]) ** 2) / (2 * 0.16 ** 2))
+        p_ok = min(1.0, pr / (0.35 * hmax))
+        f_ok = 1.0 if shoulder_w > head_w else 0.4
+        c_ok = float(np.clip(1.0 - 0.6 * offset, 0.3, 1.0))   # centred face
+        score = float(r_ok * p_ok * f_ok * c_ok)
+
+        out.append(dict(x=int(x), height=float(hh), prominence=float(pr),
+                        head_w=head_w, shoulder_w=shoulder_w,
+                        head_box=(hx0, hy0, hx1 - hx0, hy1 - hy0),
+                        core_x=core_x, core_y=core_y, core_frac=float(core_frac),
+                        ratio=float(ratio), score=score))
+    out.sort(key=lambda d: -d["score"])
+    return out
+
+
 def suppress_small_omegas(dets, min_ratio=0.40, min_ref_px=6.0, min_ref_score=0.35):
     """
     Frame-level scale consistency for omegas.
