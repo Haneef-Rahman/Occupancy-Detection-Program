@@ -1176,84 +1176,170 @@ def colorize(data):
     return cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_INFERNO)
 
 
-def draw_omega(vis, dets):
+def draw_omega(vis, dets, S=1):
     """
     Mark head-shoulder omegas: a dome arc at the head with the shoulder span
-    beneath it. Drawn instead of the body box so a capture session shows only
-    what the omega detector is asserting.
+    beneath it, drawn on the UPSCALED canvas so the arc is smooth and the
+    score is legible. All sensor-space coordinates are multiplied by S.
     """
     for d in dets:
         for om in d.get("omegas", []):
-            x = int(om["x"])
+            x = int(om["x"]) * S
             bx, by, bw, bh = d["bbox"]
-            hw = max(2, int(om["head_w"] / 2))
-            sw = max(3, int(om["shoulder_w"] / 2))
-            top = by
-            # head dome
+            hw = max(2, int(om["head_w"] / 2)) * S
+            sw = max(3, int(om["shoulder_w"] / 2)) * S
+            top = by * S
             cv2.ellipse(vis, (x, top + hw), (hw, hw), 0, 180, 360,
-                        (0, 220, 255), 1)
-            # shoulder flare
+                        (0, 220, 255), 2, cv2.LINE_AA)
             cv2.line(vis, (x - hw, top + hw), (x - sw, top + 2 * hw),
-                     (0, 220, 255), 1)
+                     (0, 220, 255), 2, cv2.LINE_AA)
             cv2.line(vis, (x + hw, top + hw), (x + sw, top + 2 * hw),
-                     (0, 220, 255), 1)
-            cv2.putText(vis, f"{om['score']:.2f}", (x - 10, max(7, top - 2)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.26, (0, 220, 255), 1,
+                     (0, 220, 255), 2, cv2.LINE_AA)
+            cv2.putText(vis, f"{om['score']:.2f}", (x - 14, max(14, top - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1,
                         cv2.LINE_AA)
     return vis
 
 
-def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any", cohesion=1,
-                 band_lo=None, band_hi=None, p_filter=False, p_min=5,
-                 show_boxes=True, flags=None):
+def draw_boxes(vis, dets, is_temp, S=1, show_boxes=True, show_ids=False):
+    """Detection boxes on the upscaled canvas — full-resolution text."""
     unit = "C" if is_temp else ""
     for d in (dets if show_boxes else []):
-        x, y, w, h = d["bbox"]
+        x, y, w, h = [v * S for v in d["bbox"]]
         pri = d.get("priority", False)
-        col = (0, 255, 255) if pri else (0, 255, 0)   # yellow = skin priority
-        cv2.rectangle(vis, (x, y), (x + w, y + h), col, 1)
-        cx, cy = int(d["centroid"][0]), int(d["centroid"][1])
-        cv2.drawMarker(vis, (cx, cy), col, cv2.MARKER_CROSS, 6, 1)
-        pk = d.get("peaks", 0)
-        tag = f"{d['val_max']:.0f}{unit}/{pk}p" + ("*" if pri else "")
-        cv2.putText(vis, tag, (x, max(8, y - 2)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 255, 255), 1, cv2.LINE_AA)
-
-    mode = "RAD" if is_temp else "AGC"
-    sens_s = f"+{sens:.1f}C" if is_temp else f"p{sens:.0f}"
-    band = ""
-    if is_temp and band_lo is not None:
-        band = f" band[{band_lo:.0f}-{band_hi:.0f}]"
-    cv2.putText(vis, f"{mode} n={len(dets)} bg={bg:.1f} thr={thr:.1f}{band} {fps:.0f}fps",
-                (3, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 255, 255), 1, cv2.LINE_AA)
-
-    # Mounting mode on its own line, colour-coded so it is obvious at a glance.
-    vlabel = SHAPE_RULES.get(view, SHAPE_RULES["any"])["label"]
-    vcolor = {"vertical": (80, 220, 255), "horizontal": (255, 200, 80)}.get(view, (200, 200, 200))
-    pf_s = f"  P<={p_min}" if p_filter else ""
-    # compact status of every stage, so a screenshot records the exact config
-    if flags:
-        col = 0
-        for kkey, name, lab, _ in TOGGLES:
-            on = flags.get(name, False)
-            c = (110, 255, 140) if on else (90, 90, 110)
-            cv2.putText(vis, lab[:4], (2 + col * 21, vis.shape[0] - 3),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.24, c, 1, cv2.LINE_AA)
-            col += 1
-
-    coh_s = f"coh={cohesion}" + ("!" if cohesion >= 3 else "")
-    coh_c = (60, 60, 255) if cohesion >= 3 else vcolor   # red: merges real people
-    cv2.putText(vis, f"[v] {vlabel}", (3, 22),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.30, vcolor, 1, cv2.LINE_AA)
-    cv2.putText(vis, coh_s, (108, 22),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.30, coh_c, 1, cv2.LINE_AA)
-    if pf_s:
-        cv2.putText(vis, pf_s, (150, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.30,
-                    (120, 255, 120), 1, cv2.LINE_AA)
-
-    if logging_on:
-        cv2.circle(vis, (vis.shape[1] - 8, 8), 4, (0, 0, 255), -1)
+        col = (0, 255, 255) if pri else (0, 255, 0)      # yellow = skin priority
+        cv2.rectangle(vis, (x, y), (x + w, y + h), col, 2)
+        cx, cy = int(d["centroid"][0] * S), int(d["centroid"][1] * S)
+        cv2.drawMarker(vis, (cx, cy), col, cv2.MARKER_CROSS, 14, 2)
+        tag = f"{d['val_max']:.0f}{unit}/{d.get('peaks', 0)}p" + ("*" if pri else "")
+        cv2.putText(vis, tag, (x, max(14, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(vis, tag, (x, max(14, y - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 255, 255), 1, cv2.LINE_AA)
+        if show_ids and "track_id" in d:
+            idt = f"#{d['track_id']}"
+            iy = y + h + 18 if y + h + 18 < vis.shape[0] - 4 else y + h - 6
+            cv2.putText(vis, idt, (x, iy),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(vis, idt, (x, iy),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 160, 60), 1, cv2.LINE_AA)
     return vis
+
+
+# -- sidebar -----------------------------------------------------------------
+SIDEBAR_W = 300
+_C_DIM   = (120, 120, 130)
+_C_TEXT  = (225, 225, 230)
+_C_ON    = (110, 255, 140)
+_C_OFF   = (95, 95, 110)
+_C_WARN  = (70, 70, 255)
+_C_HEAD  = (255, 190, 90)
+
+
+def _line(img, y, text, colour=_C_TEXT, x=12, sc=0.44, th=1):
+    cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, sc, colour, th,
+                cv2.LINE_AA)
+    return y
+
+
+def _rule(img, y, label=None):
+    cv2.line(img, (12, y), (SIDEBAR_W - 12, y), (55, 55, 65), 1)
+    if label:
+        (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.36, 1)
+        cv2.rectangle(img, (18, y - 7), (18 + tw + 8, y + 7), (24, 24, 30), -1)
+        _line(img, y + 4, label, _C_HEAD, x=22, sc=0.36)
+    return y
+
+
+def draw_sidebar(h, dets, bg, thr, sens, is_temp, fps, logging_on, view,
+                 cohesion, band_lo, band_hi, p_min, flags, show_boxes,
+                 show_omega, capture_on, capture_n, tracking):
+    """
+    Status panel rendered at native display resolution.
+
+    The stage list used to be 4-character stubs painted onto a 160x120 sensor
+    frame and then magnified 5x with nearest-neighbour — unreadable by
+    construction. Drawing it here instead means the text is never scaled.
+    """
+    sb = np.full((h, SIDEBAR_W, 3), 18, np.uint8)
+    y = 26
+    mode = "RAD" if is_temp else "AGC"
+    _line(sb, y, "FLUXNET", _C_HEAD, sc=0.58); _line(sb, y, mode, _C_DIM, x=120, sc=0.42)
+    _line(sb, y, f"{fps:4.1f} fps", _C_DIM, x=200, sc=0.42)
+
+    y += 40
+    ncol = _C_ON if dets else _C_DIM
+    _line(sb, y, f"n = {len(dets)}", ncol, sc=1.05, th=2)
+    if tracking:
+        _line(sb, y, "tracked", (255, 160, 60), x=140, sc=0.40)
+    nom = sum(d.get("omega_count", 0) for d in dets)
+    _line(sb, y + 20, f"omegas {nom}", _C_DIM, sc=0.40)
+
+    y += 44
+    _rule(sb, y, "SCENE")
+    vlabel = SHAPE_RULES.get(view, SHAPE_RULES["any"])["label"]
+    vcolor = {"vertical": (80, 220, 255),
+              "horizontal": (255, 200, 80)}.get(view, (200, 200, 200))
+    y += 24; _line(sb, y, f"[v] {vlabel}", vcolor, sc=0.46)
+    y += 20
+    # cohesion >= 3 merges two people standing close: flag it loudly
+    ccol = _C_WARN if cohesion >= 3 else _C_TEXT
+    _line(sb, y, f"cohesion {cohesion}" + ("  MERGES PAIRS" if cohesion >= 3 else ""),
+          ccol, sc=0.42)
+    y += 20; _line(sb, y, f"bg {bg:5.1f}   thr {thr:5.1f}", _C_TEXT, sc=0.42)
+    y += 20
+    sens_s = f"+{sens:.1f}C" if is_temp else f"p{sens:.0f}"
+    band = f"band {band_lo:.0f}-{band_hi:.0f}" if (is_temp and band_lo is not None) else ""
+    _line(sb, y, f"sens {sens_s}   {band}", _C_DIM, sc=0.40)
+
+    y += 22
+    _rule(sb, y, "STAGES")
+    y += 6
+    for kkey, name, lab, _d in TOGGLES:
+        y += 19
+        on = flags.get(name, False)
+        c = _C_ON if on else _C_OFF
+        cv2.rectangle(sb, (12, y - 9), (24, y + 2), c, -1 if on else 1)
+        _line(sb, y, kkey, _C_DIM, x=32, sc=0.40)
+        _line(sb, y, lab, c, x=52, sc=0.44)
+        if name == "pfilter" and on:
+            _line(sb, y, f"<={p_min}", _C_DIM, x=170, sc=0.38)
+        _line(sb, y, "ON" if on else "off", c, x=240, sc=0.40)
+
+    y += 22
+    _rule(sb, y, "DISPLAY")
+    y += 20
+    for lab, on, kkey in (("boxes", show_boxes, "o"), ("omega", show_omega, "O"),
+                          ("logging", logging_on, "l")):
+        _line(sb, y, f"{kkey}  {lab}", _C_TEXT if on else _C_OFF, sc=0.40)
+        _line(sb, y, "ON" if on else "off", _C_ON if on else _C_OFF, x=240, sc=0.40)
+        y += 17
+
+    if capture_on:
+        y += 6
+        cv2.circle(sb, (18, y - 4), 5, (0, 0, 255), -1)
+        _line(sb, y, f"REC  {capture_n} frames", (80, 80, 255), x=32, sc=0.44)
+        y += 16
+
+    # Per-detection detail flows below DISPLAY and is clipped to whatever room
+    # is left, so it can never collide with the block above it.
+    if dets and y + 42 < h:
+        y += 20
+        _rule(sb, y, "DETECTIONS")
+        y += 20
+        room = max(0, (h - 10 - y) // 16)
+        for d in dets[:room]:
+            pri = "*" if d.get("priority") else " "
+            oc = d.get("omega_count", 0)
+            tid = f"#{d['track_id']}" if "track_id" in d else "  "
+            _line(sb, y, f"{tid:>4}{pri} {d['val_max']:4.1f}C "
+                         f"{d.get('peaks', 0):2d}p {d['area_px']:4d}px"
+                         + (f" {oc}w" if oc else ""),
+                  (0, 255, 255) if d.get("priority") else _C_TEXT, sc=0.38)
+            y += 16
+        if len(dets) > room:
+            _line(sb, y, f"+{len(dets) - room} more", _C_DIM, sc=0.36)
+    return sb
 
 
 HELP = """
@@ -1526,27 +1612,26 @@ def main():
 
         base = color if view == 0 else (maskc if view == 1 else
                                         cv2.addWeighted(color, 0.7, maskc, 0.3, 0))
-        vis = draw_overlay(base.copy(), dets, bg, thr, eff_sens, is_temp, fps,
-                           logging_on, view_mode, cohesion,
-                           args.tmin if is_temp else None,
-                           args.tmax if is_temp else None,
-                           flags['pfilter'], args.p_min, show_boxes, flags)
+        # Upscale FIRST, then annotate: every glyph is drawn at display
+        # resolution instead of being magnified 5x with nearest-neighbour.
+        S = DISPLAY_SCALE
+        frame = cv2.resize(base, (base.shape[1] * S, base.shape[0] * S),
+                           interpolation=cv2.INTER_NEAREST)
+        frame = draw_boxes(frame, dets, is_temp, S, show_boxes,
+                           show_ids=flags["kalman"])
         if show_omega:
-            vis = draw_omega(vis, dets)
-        if flags["kalman"]:
-            for d in dets:
-                if "track_id" in d:
-                    x, y, w, h = d["bbox"]
-                    cv2.putText(vis, f"#{d['track_id']}", (x, y + h + 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.28,
-                                (255, 160, 60), 1, cv2.LINE_AA)
+            frame = draw_omega(frame, dets, S)
+
+        sb = draw_sidebar(frame.shape[0], dets, bg, thr, eff_sens, is_temp, fps,
+                          logging_on, view_mode, cohesion,
+                          args.tmin if is_temp else None,
+                          args.tmax if is_temp else None,
+                          args.p_min, flags, show_boxes, show_omega,
+                          capture_on, capture_n, flags["kalman"])
+        vis = np.hstack([frame, sb])
         if capture_on:
-            cv2.circle(vis, (vis.shape[1] - 8, 20), 4, (0, 0, 255), -1)
-            cv2.putText(vis, f"REC {capture_n}", (vis.shape[1] - 52, 34),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.28, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.imshow("FLUXNET thermal baseline",
-                   cv2.resize(vis, (vis.shape[1] * DISPLAY_SCALE, vis.shape[0] * DISPLAY_SCALE),
-                              interpolation=cv2.INTER_NEAREST))
+            cv2.circle(vis, (frame.shape[1] - 18, 18), 7, (0, 0, 255), -1)
+        cv2.imshow("FLUXNET thermal baseline", vis)
 
         k = cv2.waitKey(1) & 0xFF
         if k in (ord("q"), 27):
