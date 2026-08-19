@@ -89,6 +89,51 @@ python thermal_detect.py --device 1 --delta 4.0 --note "2-person walkthrough"
 | `a` | print current background and threshold |
 | `r` | cycle display: colour → mask → blended (useful for tuning) |
 
+### Stage toggles — the ablation panel
+
+Every filter and shape descriptor can be switched on and off live, so a stage's
+contribution can be *measured* rather than assumed. The active configuration is
+drawn along the bottom of the view (lit = on) and written into the capture
+manifest, so every recorded frame is attributable to an exact configuration.
+
+| Key | Stage | Default | What it does |
+|---|---|---|---|
+| `t` | TempBand | ON | absolute `27 ≤ T ≤ 36 °C` plausibility band |
+| `w` | Watershed | ON | cuts touching bodies at the distance-transform valley |
+| `g` | Merge | ON | rejoins body fragments split by cool clothing |
+| `u` | ClustSml | ON | clusters small patches (vertical mode) |
+| `y` | ShapeGate | ON | aspect / extent / rect-fill envelope |
+| `k` | MinPeaks | ON | requires ≥ N warm centres — a body is multi-peaked |
+| `p` | P-Filter | OFF | drops blobs with ≤ `--p-min` peaks |
+| `e` | EquipRej | ON | rigid-surround context test (the laptop rejector) |
+| `i` | SkinPrio | ON | skin-band blobs bypass later gates |
+| `x` | BodyExt | OFF | grows a detection onto clothed torso/legs |
+| `z` | Omega | ON | Li (2009) head-and-shoulder Ω detection |
+| `f` | Kalman | OFF | temporal tracking (below) |
+| `B` | StaticSup | ON | suppresses unmoving warm objects |
+
+To find out which stage is carrying a scene: turn everything off, then add one
+back at a time and watch the count. That is the whole point of the panel.
+
+### Kalman tracking (`f`, or `--kalman`)
+
+`tracker.py` runs a constant-velocity Kalman filter per person — state
+`[x, y, vx, vy, w, h]`, position and size measured, velocity inferred — with
+greedy gated association (28 px gate; a person cannot jump further between
+frames at 8.7 fps).
+
+Three things it buys that no single-frame descriptor can:
+
+- **Transient rejection.** A track must survive `min_hits=3` frames before it is
+  counted. Clutter that flickers for one or two frames never becomes a person.
+- **FFC survival.** The shutter freezes the image ~1 s. A track coasts on its
+  prediction for `max_misses=6` frames instead of dropping the person and
+  re-acquiring them as someone new.
+- **Identity.** Counting *crossings* needs an ID and a trajectory, not just a
+  per-frame presence count. Track IDs are drawn under each box.
+
+When tracking is on, the displayed count is confirmed tracks, not raw blobs.
+
 ## How the detection works
 
 1. **Radiometric capture** — 16-bit Y16/TLinear, so each pixel is an absolute

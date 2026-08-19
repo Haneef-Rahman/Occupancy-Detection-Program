@@ -45,6 +45,34 @@ try:
 except ImportError:
     SF = None
 
+try:
+    from tracker import MultiTracker
+except ImportError:
+    MultiTracker = None
+
+# ---------------------------------------------------------------------------
+# Every processing stage is independently switchable, so each can be A/B'd
+# against the same footage. Key -> (flag name, label, default).
+# ---------------------------------------------------------------------------
+TOGGLES = [
+    ("t", "band",     "TempBand",  True),   # absolute human temperature band
+    ("w", "split",    "Watershed", True),   # split touching bodies
+    ("g", "merge",    "Merge",     True),   # rejoin body fragments
+    ("u", "cluster",  "ClustSml",  True),   # cluster small patches
+    ("y", "shape",    "ShapeGate", True),   # aspect / extent envelope
+    ("k", "peaks",    "MinPeaks",  True),   # >=N warm centres
+    ("p", "pfilter",  "P-Filter",  False),  # drop blobs with <= p_min peaks
+    ("e", "equip",    "EquipRej",  True),   # reject powered equipment
+    ("i", "skin",     "SkinPrio",  True),   # skin band grants immunity
+    ("x", "extend",   "BodyExt",   False),  # grow onto clothed torso/legs
+    ("z", "omega",    "Omega",     True),   # head-shoulder detection
+    ("f", "kalman",   "Kalman",    False),  # temporal tracking
+    ("B", "static",   "StaticSup", True),   # suppress unmoving objects
+]
+FLAG_KEYS = {k: name for k, name, _, _ in TOGGLES}
+FLAG_LABEL = {name: lab for _, name, lab, _ in TOGGLES}
+DEFAULT_FLAGS = {name: dflt for _, name, _, dflt in TOGGLES}
+
 # ----------------------------------------------------------------------------
 LEPTON_W, LEPTON_H = 160, 120
 DEFAULT_DELTA_C = 4.0      # radiometric: °C above ambient
@@ -853,7 +881,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   cohesion=1, tmin=None, min_peaks=None, peak_check_area=None,
                   body_min_area=14, body_min_c=29.0, moving=None,
                   equip_thresh=3.0, p_filter=False, p_min=5,
-                  body_extend=False, body_delta=2.0):
+                  body_extend=False, body_delta=2.0, flags=None):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
 
@@ -868,6 +896,15 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                Adjust live with 'm' / 'n'.
     """
     cohesion = int(max(0, min(4, cohesion)))
+    F = dict(DEFAULT_FLAGS)
+    if flags:
+        F.update(flags)
+    if not F["band"]:
+        tmin = tmax = None
+    if not F["extend"]:
+        body_extend = False
+    if not F["pfilter"]:
+        p_filter = False
     # Relative test (warmer than this room) AND absolute band (plausibly human).
     #
     # Guard: in a warm room, ambient+delta can rise above tmax and the band
@@ -902,7 +939,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
     # merge_nearby can tell "fragments of one body" from "two bodies we cut".
     _, cc_labels = cv2.connectedComponents((mask > 0).astype(np.uint8))
 
-    if split:
+    if split and F["split"]:
         # Lever 3: coarser seeds mean only substantial cores start a region,
         # so thin fragments stop generating their own split.
         labels, n = split_touching(mask, min_sep=3 + cohesion)
@@ -938,6 +975,8 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
 
         blob = data[ys, xs]
         sfrac, spx, priority = skin_score(blob)
+        if not F["skin"]:
+            priority = False
 
         # Rotation-invariant boxiness: a laptop at ANY angle fills its
         # minimum-area rectangle. Applies to priority blobs too.
@@ -948,6 +987,8 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             continue
 
         ok, aspect, extent = shape_ok(w, h, area, rules, priority)
+        if not F["shape"]:
+            ok = True
         if not ok:
             continue
 
@@ -968,12 +1009,14 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
 
     # Lever 2: a wider gap rejoins pieces that survived as separate components.
     eff_min_sep = min_sep if min_sep is not None else rules.get("min_sep_px", 0)
+    if not F["merge"]:
+        merge_gap = -1                      # gap < 0 disables merging
     dets = merge_nearby(dets, merge_gap + 3 * cohesion,
                         rules.get("merge_axis", "vertical"), eff_min_sep)
 
     # Cluster surviving small patches into bodies, and discard the ones that
     # remain alone. Radius grows with cohesion, like the other levers.
-    if rules.get("cluster_small"):
+    if rules.get("cluster_small") and F["cluster"]:
         dets = cluster_small(dets,
                              small_area=rules.get("small_area", 40),
                              radius=rules.get("cluster_radius", 14) + 2 * cohesion,
@@ -986,7 +1029,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
     # lives one temperature level down. So each surviving blob is re-examined
     # against the warm region that contains it, combined with rigidity and
     # thermal-structure evidence.
-    if SF is not None and rules.get("reject_equipment") and tmin is not None:
+    if SF is not None and rules.get("reject_equipment") and F["equip"] and tmin is not None:
         kept = []
         for d in dets:
             x, y, w, h = d["bbox"]
@@ -1061,7 +1104,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         d["peaks"], d["std_c"], d["range_c"] = int(npk), float(sd), float(rg)
 
         # head-shoulder omegas, for the capture overlay and for counting
-        if SF is not None and view in ("horizontal", "any"):
+        if SF is not None and F["omega"] and view in ("horizontal", "any"):
             x, y, w, h = d["bbox"]
             sub = np.zeros(mask.shape, np.uint8)
             sub[y:y + h, x:x + w] = mask[y:y + h, x:x + w]
@@ -1150,7 +1193,7 @@ def draw_omega(vis, dets):
 
 def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any", cohesion=1,
                  band_lo=None, band_hi=None, p_filter=False, p_min=5,
-                 show_boxes=True):
+                 show_boxes=True, flags=None):
     unit = "C" if is_temp else ""
     for d in (dets if show_boxes else []):
         x, y, w, h = d["bbox"]
@@ -1176,6 +1219,16 @@ def draw_overlay(vis, dets, bg, thr, sens, is_temp, fps, logging_on, view="any",
     vlabel = SHAPE_RULES.get(view, SHAPE_RULES["any"])["label"]
     vcolor = {"vertical": (80, 220, 255), "horizontal": (255, 200, 80)}.get(view, (200, 200, 200))
     pf_s = f"  P<={p_min}" if p_filter else ""
+    # compact status of every stage, so a screenshot records the exact config
+    if flags:
+        col = 0
+        for kkey, name, lab, _ in TOGGLES:
+            on = flags.get(name, False)
+            c = (110, 255, 140) if on else (90, 90, 110)
+            cv2.putText(vis, lab[:4], (2 + col * 21, vis.shape[0] - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.24, c, 1, cv2.LINE_AA)
+            col += 1
+
     coh_s = f"coh={cohesion}" + ("!" if cohesion >= 3 else "")
     coh_c = (60, 60, 255) if cohesion >= 3 else vcolor   # red: merges real people
     cv2.putText(vis, f"[v] {vlabel}", (3, 22),
@@ -1201,6 +1254,11 @@ HELP = """
   p toggle P-FILTER (drop blobs with <= --p-min warm centres)
   x toggle BODY-EXTENSION (recover cool clothed torso/legs)
   c START/STOP continuous capture  |  o body boxes on/off  |  O omega on/off
+
+  STAGE TOGGLES (each shown along the bottom of the view):
+    t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
+    k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
+    z Omega      f Kalman     B StaticSup
   a print background/threshold | r cycle display (color/mask/both)
 """
 
@@ -1248,6 +1306,8 @@ def main():
     ap.add_argument("--peak-check-area", type=int, default=None,
                     help="only apply --min-peaks above this blob area (px); "
                          "distant people legitimately have one peak")
+    ap.add_argument("--kalman", action="store_true",
+                    help="start with Kalman tracking on (toggle with 'f')")
     ap.add_argument("--capture-every", type=int, default=1,
                     help="during capture, save every Nth frame (default 1)")
     ap.add_argument("--omega-only", action="store_true",
@@ -1330,6 +1390,13 @@ def main():
                  "threshold", "cx", "cy", "area_px", "val_max", "aspect",
                  "extent", "peaks", "std_c", "skin_px", "priority", "note"])
 
+    flags = dict(DEFAULT_FLAGS)
+    flags["pfilter"] = args.p_filter
+    flags["extend"] = args.body_extend
+    flags["kalman"] = args.kalman
+    flags["static"] = not args.no_static
+    tracker = MultiTracker() if MultiTracker else None
+
     logging_on = False
     # Continuous capture: one keypress starts it, frames stream to disk with a
     # manifest. Building a few thousand training frames by pressing 's' is not
@@ -1343,10 +1410,7 @@ def main():
     show_omega = True
 
     suppressor = StaticSuppressor()
-    suppressor.enabled = not args.no_static
     cohesion = args.cohesion       # anti-fragmentation strength 0..4
-    p_filter = args.p_filter       # drop blobs with <= p_min warm centres
-    body_extend = args.body_extend # grow detections onto clothed body parts
     view_mode = args.view          # 'vertical' | 'horizontal' | 'any'
     view = 0                       # display style: color / mask / blended
     frame_i = 0
@@ -1366,6 +1430,7 @@ def main():
             eff_sens = SHAPE_RULES.get(view_mode, {}).get("delta", DEFAULT_DELTA_C)
         thr, bg = compute_threshold(data, is_temp, eff_sens)
         suppressor.update(data)
+        suppressor.enabled = flags["static"]
         moving = suppressor.moving_mask(data) if is_temp else None
         dets, mask = detect_people(
             data, thr,
@@ -1381,11 +1446,25 @@ def main():
             peak_check_area=args.peak_check_area,
             moving=moving,
             equip_thresh=args.equip_thresh,
-            p_filter=p_filter,
+            p_filter=flags['pfilter'],
             p_min=args.p_min,
-            body_extend=body_extend,
+            body_extend=flags['extend'],
             body_delta=args.body_delta,
+            flags=flags,
         )
+
+        # ---- Kalman tracking -------------------------------------------
+        # A person persists; clutter flickers. Requiring a track to survive
+        # several frames rejects transients no single frame can catch, and
+        # coasting through the Lepton's FFC pause stops one person being
+        # re-acquired as a new one.
+        tracks = []
+        if flags["kalman"] and tracker is not None:
+            tracker.update(dets)
+            tracks = tracker.confirmed()
+            dets = [dict(t.det, bbox=t.bbox, centroid=t.centroid,
+                         track_id=t.id, track_hits=t.hits,
+                         speed=t.speed) for t in tracks]
 
         now = time.time()
         dt = now - t_last
@@ -1422,6 +1501,7 @@ def main():
                     view_mode, f"{bg:.2f}", f"{thr:.2f}", len(dets),
                     sum(d.get("omega_count", 0) for d in dets),
                     max([d.get("omega_score", 0.0) for d in dets], default=0.0),
+                    "+".join(FLAG_LABEL[n] for n in flags if flags[n]),
                     args.note,
                 ])
             capture_n += 1
@@ -1432,9 +1512,16 @@ def main():
                            logging_on, view_mode, cohesion,
                            args.tmin if is_temp else None,
                            args.tmax if is_temp else None,
-                           p_filter, args.p_min, show_boxes)
+                           flags['pfilter'], args.p_min, show_boxes, flags)
         if show_omega:
             vis = draw_omega(vis, dets)
+        if flags["kalman"]:
+            for d in dets:
+                if "track_id" in d:
+                    x, y, w, h = d["bbox"]
+                    cv2.putText(vis, f"#{d['track_id']}", (x, y + h + 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.28,
+                                (255, 160, 60), 1, cv2.LINE_AA)
         if capture_on:
             cv2.circle(vis, (vis.shape[1] - 8, 20), 4, (0, 0, 255), -1)
             cv2.putText(vis, f"REC {capture_n}", (vis.shape[1] - 52, 34),
@@ -1494,7 +1581,7 @@ def main():
                 capture_writer = csv.writer(capture_manifest)
                 capture_writer.writerow(["file", "timestamp", "view", "background",
                                          "threshold", "n_det", "omega_count",
-                                         "omega_score", "note"])
+                                         "omega_score", "flags", "note"])
                 capture_n = 0
                 print(f"  RECORDING -> {capture_dir}  (press c again to stop)")
             else:
@@ -1507,20 +1594,16 @@ def main():
         elif k == ord("O"):
             show_omega = not show_omega
             print(f"  omega overlay {'ON' if show_omega else 'OFF'}")
-        elif k == ord("x"):
-            body_extend = not body_extend
-            print(f"  body-extension {'ON' if body_extend else 'OFF'} "
-                  f"(recovers clothed parts at ambient+{args.body_delta}C)")
-        elif k == ord("p"):
-            p_filter = not p_filter
-            print(f"  p-filter {'ON' if p_filter else 'OFF'} "
-                  f"(drops blobs with <= {args.p_min} peaks)")
+        elif 0 < k < 256 and chr(k) in FLAG_KEYS:
+            name = FLAG_KEYS[chr(k)]
+            flags[name] = not flags[name]
+            if name == "kalman" and tracker is not None:
+                tracker.reset()
+            print(f"  {FLAG_LABEL[name]:<10} {'ON ' if flags[name] else 'OFF'}"
+                  f"   [{' '.join(FLAG_LABEL[n] for n in flags if flags[n])}]")
         elif k == ord("b"):
             suppressor.reset()
             print("  static background reset — relearning")
-        elif k == ord("B"):
-            suppressor.enabled = not suppressor.enabled
-            print(f"  static suppression {'ON' if suppressor.enabled else 'OFF'}")
         elif k == ord("h"):
             print(HELP)
 
