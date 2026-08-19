@@ -55,6 +55,7 @@ class KalmanTrack:
         # Peak constellations, centred per frame so global translation is
         # removed and only INTERNAL deformation remains.
         self.pk_hist = []
+        self.w_hist = [float(w)]      # silhouette width, for gait periodicity
         self._push_peaks(det)
 
     def _push_peaks(self, det):
@@ -66,6 +67,45 @@ class KalmanTrack:
             self.pk_hist.append(p - p.mean(axis=0))
         if len(self.pk_hist) > 40:
             self.pk_hist.pop(0)
+
+    def gait(self, fps=8.7, min_frames=24, lo_hz=0.6, hi_hz=3.0):
+        """
+        Is the deformation PERIODIC, and at a human cadence?
+
+        Rigidity asks whether the shape changes; this asks whether it changes
+        the way a body does. Human walking is strongly periodic -- 0.8-1.2 Hz
+        stride, 1.6-2.4 Hz step -- and the silhouette width oscillates with it
+        as the legs open and close. At 8.7 fps the Nyquist limit is 4.3 Hz, so
+        step frequency is resolvable; stride certainly is.
+
+        The signal is width over time, detrended (a person walking toward the
+        camera grows steadily, which is not gait). Returns
+        (dominant_hz, band_power_fraction) or None when there is too little
+        history. A fraction near 1 means almost all the variation sits in the
+        human cadence band.
+
+        Note the failure mode: a fan or a rotating machine is also periodic.
+        Those sit well above 3 Hz and are excluded by the band, but a slow
+        oscillating fan would not be -- this is evidence, not proof.
+        """
+        if len(self.w_hist) < min_frames:
+            return None
+        w = np.asarray(self.w_hist[-64:], np.float64)
+        t = np.arange(len(w))
+        w = w - np.polyval(np.polyfit(t, w, 1), t)      # detrend
+        if w.std() < 1e-6:
+            return (0.0, 0.0)
+        w = w * np.hanning(len(w))
+        spec = np.abs(np.fft.rfft(w)) ** 2
+        freqs = np.fft.rfftfreq(len(w), d=1.0 / max(1e-6, fps))
+        spec[0] = 0.0
+        total = spec.sum()
+        if total <= 0:
+            return (0.0, 0.0)
+        band = (freqs >= lo_hz) & (freqs <= hi_hz)
+        frac = float(spec[band].sum() / total)
+        dom = float(freqs[int(np.argmax(spec))])
+        return (dom, frac)
 
     def rigidity(self, min_frames=8, min_pts=3):
         """
@@ -125,6 +165,9 @@ class KalmanTrack:
         self.misses = 0
         self.det = det
         self._push_peaks(det)
+        self.w_hist.append(float(self.x[4]))
+        if len(self.w_hist) > 64:
+            self.w_hist.pop(0)
         self.history.append((self.x[0], self.x[1]))
         if len(self.history) > 60:
             self.history.pop(0)

@@ -217,11 +217,24 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# ---- FLUXNET: captured sensor data (keep the repo about code) ----
-logs/
+# ---- FLUXNET: captured sensor data ----
+# Raw captures stay out: 2900+ .npy frames, ~240 MB, and a git repo is the wrong
+# place for a growing binary dataset. What IS committed instead:
+#   Thermal/datasets/   representative runs packed as compressed float16 .npz
+#                       (~6 MB each) plus their manifests, so results are
+#                       reproducible without shipping every frame
+#   Thermal/figures/    montages and UI captures used in the report
+#   */manifest.csv      per-run flag configuration and per-frame results
+logs/*.npy
+logs/**/*.npy
+logs/frame_*.png
 *.npy
-*.csv
-frame_*.png
+
+# ...but keep the run records, which are small and carry the flag config
+!logs/**/manifest.csv
+!logs/*.csv
+!Thermal/datasets/*.npz
+!Thermal/datasets/*.csv
 
 # third-party build dependency, not project code
 libuvc/

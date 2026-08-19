@@ -69,6 +69,9 @@ TOGGLES = [
     ("j", "OmScale",  "OmScale",   True),   # drop omegas too small for frame
     ("f", "kalman",   "Kalman",    False),  # temporal tracking
     ("R", "rigid",    "NonRigid",  False),  # reject rigid peak constellations
+    ("G", "ground",   "GndPlane",  False),  # ground-plane scale consistency
+    ("A", "gait",     "Gait",      False),  # periodic at a walking cadence
+    ("V", "vgrad",    "VGrad",     False),  # head-warm / legs-cool gradient
     ("B", "static",   "StaticSup", True),   # suppress unmoving objects
 ]
 FLAG_KEYS = {k: name for k, name, _, _ in TOGGLES}
@@ -153,7 +156,7 @@ MAX_EXTENT = 0.82
 # Same idea but rotation-invariant, measured against the minimum-area rect.
 # This is the one that actually catches a laptop lying at an angle.
 MAX_RECT_FILL = 0.86
-DISPLAY_SCALE = 5
+DISPLAY_SCALE = 6      # overridden by --scale
 LOG_DIR = "logs"
 
 # Two mounting geometries, switchable live with the 'v' key (and later
@@ -911,7 +914,9 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   body_min_area=14, body_min_c=29.0, moving=None,
                   equip_thresh=3.0, p_filter=False, p_min=5,
                   body_extend=False, body_delta=2.0, flags=None,
-                  omega_scale_ratio=0.40, omega_delta=2.0):
+                  omega_scale_ratio=0.40, omega_delta=2.0,
+                  gnd_horizon=0.0, gnd_gain=0.0, gnd_tol=0.5,
+                  vgrad_max=-0.15):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
 
@@ -1095,6 +1100,30 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             _warm_lbl[0] = cv2.connectedComponents(wm)[1]
         return _warm_lbl[0]
 
+    _owner = [None]
+
+    def _owner_map(all_dets):
+        """
+        Assign every warm pixel to its NEAREST hot blob.
+
+        Clipping each blob's warm region to a box around its own hot pixels
+        fails in both directions: a coated person's hot bbox is just the face,
+        so the swinging hands fall outside it and the articulation signal is
+        lost; while a loose box lets a person and adjacent equipment share
+        limbs. Nearest-seed assignment splits a merged warm silhouette along
+        the natural boundary instead of an arbitrary rectangle.
+        """
+        if _owner[0] is None:
+            dists = []
+            for d in all_dets:
+                x, y, w, h = d["bbox"]
+                seed = np.ones(mask.shape, np.uint8)
+                seed[y:y + h, x:x + w] = 1 - (binm[y:y + h, x:x + w] > 0)
+                dists.append(cv2.distanceTransform(seed, cv2.DIST_L2, 3))
+            _owner[0] = (np.argmin(np.stack(dists, 0), axis=0)
+                         if dists else np.zeros(mask.shape, np.int32))
+        return _owner[0]
+
     def _warm_of(hot_sub):
         """The connected warm body containing this hot blob."""
         lbl = _warm_labels()
@@ -1137,7 +1166,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
     # Thermal texture is measured on the FINAL body (after merging/clustering),
     # not on individual fragments, so the peak count reflects the whole person.
     binm = mask > 0
-    for d in dets:
+    for di, d in enumerate(dets):
         x, y, w, h = d["bbox"]
         if d.get("_ext_mask") is not None:
             # count warm centres over the WHOLE body, not just the hot head
@@ -1151,6 +1180,27 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         else:
             npk, sd, rg = 1, 0.0, 0.0
         d["peaks"], d["std_c"], d["range_c"] = int(npk), float(sd), float(rg)
+
+        # Vertical thermal gradient. A body cools monotonically downward: the
+        # head is exposed, the torso insulated, the legs both clothed and
+        # furthest from the core. That is the Fanger heat balance applied down
+        # the body, not a heuristic. Equipment has an arbitrary profile set by
+        # where its vents happen to be. Reported as the correlation between row
+        # index and mean row temperature -- negative means cooling downward.
+        if ys_.size > 12:
+            rr = np.unique(ys_)
+            if rr.size >= 4:
+                means = np.array([data[ys_[ys_ == r], xs_[ys_ == r]].mean()
+                                  for r in rr])
+                if means.std() > 1e-6 and rr.std() > 1e-6:
+                    rc = np.corrcoef(rr.astype(np.float64), means)[0, 1]
+                    d["vgrad"] = float(rc) if np.isfinite(rc) else 0.0
+                else:
+                    d["vgrad"] = 0.0
+            else:
+                d["vgrad"] = 0.0
+        else:
+            d["vgrad"] = 0.0
         # Peak GEOMETRY for the temporal rigidity test — measured on the WARM
         # silhouette, not the hot mask. The hot mask is face and hands only;
         # its peaks sit inside the head and barely move relative to each other,
@@ -1161,14 +1211,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             hs = np.zeros(mask.shape, np.uint8)
             hs[y:y + h, x:x + w] = binm[y:y + h, x:x + w] * 255
             wsub = _warm_of(hs)
-            # Clip to a generous neighbourhood of this blob. Where a person
-            # stands next to warm equipment the two silhouettes merge into one
-            # component, and without this the equipment track inherits the
-            # person's limb articulation and scores as non-rigid.
-            gx, gy = int(w * 0.75) + 4, int(h * 0.75) + 4
-            box = np.zeros(mask.shape, bool)
-            box[max(0, y - gy):y + h + gy, max(0, x - gx):x + w + gx] = True
-            wsub = wsub * box
+            wsub = wsub * (_owner_map(dets) == di)
             wys, wxs = np.where(wsub > 0)
             d["peak_pts"] = (peak_points(data, wys, wxs) if wxs.size
                              else np.empty((0, 2), np.float64))
@@ -1239,7 +1282,44 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
     # trade — it is the strongest clutter rejector available, at the cost of
     # distant or heavily-clothed people who cannot show enough structure.
     if p_filter:
-        dets = [d for d in dets if d.get("peaks", 0) > p_min]
+        if F.get("rigid"):
+            # Bonus system active. Do NOT drop here — a rejected blob still
+            # needs a track so it can accumulate the motion history that earns
+            # it readmission. Tag it and let the main loop decide once the
+            # tracker has evidence.
+            for d in dets:
+                d["p_reject"] = d.get("peaks", 0) <= p_min
+        else:
+            dets = [d for d in dets if d.get("peaks", 0) > p_min]
+
+    # ---- GROUND-PLANE SCALE PRIOR (toggle 'G') -----------------------------
+    # With a fixed camera, a person standing on the floor has a DETERMINED
+    # apparent height for their image position: nearer feet sit lower in the
+    # frame and subtend more pixels. Under the usual linear approximation,
+    #     h_expected(y_feet) = gain * (y_feet - horizon)
+    # This is the geometric prior that carried pre-deep-learning pedestrian
+    # detection, and it rejects clutter for a reason no thermal or shape
+    # descriptor can reach: a laptop sits on a DESK, not on the floor, so it is
+    # the wrong size for where it appears. Same for wall heaters and monitors.
+    #
+    # Only meaningful in the forward-looking view; overhead has no ground plane
+    # in this sense.
+    if F["ground"] and view in ("horizontal", "any") and gnd_gain > 0:
+        keep = []
+        for d in dets:
+            x, y, w, h = d["bbox"]
+            y_feet = y + h
+            h_exp = gnd_gain * max(1.0, y_feet - gnd_horizon)
+            d["gnd_exp"] = float(h_exp)
+            d["gnd_err"] = float(abs(h - h_exp) / max(1.0, h_exp))
+            if d["gnd_err"] <= gnd_tol:
+                keep.append(d)
+        dets = keep
+
+    if F["vgrad"] and view in ("horizontal", "any"):
+        # Negative correlation = cooling downward = body-like.
+        dets = [d for d in dets
+                if d.get("area_px", 0) < 60 or d.get("vgrad", 0.0) <= vgrad_max]
 
     dets.sort(key=lambda d: (d.get("priority", False), d["area_px"]), reverse=True)
     return dets, mask
@@ -1358,7 +1438,9 @@ def draw_boxes(vis, dets, is_temp, S=1, show_boxes=True, show_ids=False):
         cv2.rectangle(vis, (x, y), (x + w, y + h), col, 2)
         cx, cy = int(d["centroid"][0] * S), int(d["centroid"][1] * S)
         cv2.drawMarker(vis, (cx, cy), col, cv2.MARKER_CROSS, 14, 2)
-        tag = f"{d['val_max']:.0f}{unit}/{d.get('peaks', 0)}p" + ("*" if pri else "")
+        bn = d.get("peaks_bonus", 0)
+        tag = (f"{d['val_max']:.0f}{unit}/{d.get('peaks', 0)}p"
+               + (f"+{bn}" if bn else "") + ("*" if pri else ""))
         cv2.putText(vis, tag, (x, max(14, y - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(vis, tag, (x, max(14, y - 6)),
@@ -1374,7 +1456,7 @@ def draw_boxes(vis, dets, is_temp, S=1, show_boxes=True, show_ids=False):
 
 
 # -- sidebar -----------------------------------------------------------------
-SIDEBAR_W = 300
+SIDEBAR_W = 330
 _C_DIM   = (120, 120, 130)
 _C_TEXT  = (225, 225, 230)
 _C_ON    = (110, 255, 140)
@@ -1409,7 +1491,11 @@ def draw_sidebar(h, dets, bg, thr, sens, is_temp, fps, logging_on, view,
     frame and then magnified 5x with nearest-neighbour — unreadable by
     construction. Drawing it here instead means the text is never scaled.
     """
-    sb = np.full((h, SIDEBAR_W, 3), 18, np.uint8)
+    # Draw onto a canvas taller than any possible layout, then crop to the
+    # ink. Clipping was previously possible because the panel was forced to the
+    # frame's height regardless of how much it had to say.
+    SCRATCH = 2000
+    sb = np.full((SCRATCH, SIDEBAR_W, 3), 18, np.uint8)
     y = 26
     mode = "RAD" if is_temp else "AGC"
     _line(sb, y, "FLUXNET", _C_HEAD, sc=0.58); _line(sb, y, mode, _C_DIM, x=120, sc=0.42)
@@ -1483,25 +1569,27 @@ def draw_sidebar(h, dets, bg, thr, sens, is_temp, fps, logging_on, view,
 
     # Per-detection detail flows below DISPLAY and is clipped to whatever room
     # is left, so it can never collide with the block above it.
-    if dets and y + 42 < h:
+    if dets:
         y += 20
         _rule(sb, y, "DETECTIONS")
         y += 20
-        room = max(0, (h - 10 - y) // 16)
+        room = 8
         for d in dets[:room]:
             pri = "*" if d.get("priority") else " "
             oc = d.get("omega_count", 0)
             tid = f"#{d['track_id']}" if "track_id" in d else "  "
             rg = d.get("rigidity")
             rgs = f" r{rg:.3f}" if rg is not None else ""
+            bn = d.get("peaks_bonus", 0)
             _line(sb, y, f"{tid:>4}{pri} {d['val_max']:4.1f}C "
-                         f"{d.get('peaks', 0):2d}p {d['area_px']:4d}px"
+                         f"{d.get('peaks', 0):2d}p{('+%d' % bn) if bn else '  '} "
+                         f"{d['area_px']:4d}px"
                          + (f" {oc}w" if oc else "") + rgs,
                   (0, 255, 255) if d.get("priority") else _C_TEXT, sc=0.38)
             y += 16
         if len(dets) > room:
             _line(sb, y, f"+{len(dets) - room} more", _C_DIM, sc=0.36)
-    return sb
+    return sb[:max(h, y + 14)]
 
 
 HELP = """
@@ -1519,6 +1607,9 @@ HELP = """
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
     z Omega      j OmScale    f Kalman     R NonRigid   B StaticSup
+    G GndPlane   A Gait       V VGrad
+
+  C sample ground-plane calibration point (walk to several distances)
 
   T cursor TEMPERATURE PROBE (hover to read the exact pixel value)
   a print background/threshold | r cycle display (color/mask/both)
@@ -1572,6 +1663,8 @@ def main():
                     help="start with Kalman tracking on (toggle with 'f')")
     ap.add_argument("--capture-every", type=int, default=1,
                     help="during capture, save every Nth frame (default 1)")
+    ap.add_argument("--scale", type=int, default=DISPLAY_SCALE,
+                    help="display magnification (default 6 -> 960x720 view)")
     ap.add_argument("--rigid-thresh", type=float, default=0.005,
                     help="peak-constellation deformation below this is treated "
                          "as a rigid object (toggle 'R'). Synthetic: walking "
@@ -1580,6 +1673,29 @@ def main():
                          "first — the sidebar shows the live value as 'r'. "
                          "Sensor noise puts a nonzero floor under equipment "
                          "that this synthetic cannot predict.")
+    ap.add_argument("--gait-frac", type=float, default=0.35,
+                    help="fraction of width-oscillation power that must fall in "
+                         "the 0.6-3.0 Hz walking band (toggle 'A'). Tracks "
+                         "without enough history are never judged.")
+    ap.add_argument("--gnd-horizon", type=float, default=0.0,
+                    help="image row of the horizon for the ground-plane prior "
+                         "(toggle 'G')")
+    ap.add_argument("--gnd-gain", type=float, default=0.0,
+                    help="expected person pixel-height per row below the "
+                         "horizon. 0 disables. Calibrate with 'C': walk the "
+                         "space and the console prints (y_feet, height) pairs "
+                         "plus the fitted gain.")
+    ap.add_argument("--gnd-tol", type=float, default=0.5,
+                    help="fractional tolerance on expected height (0.5 = accept "
+                         "half to 1.5x, generous on purpose)")
+    ap.add_argument("--vgrad-max", type=float, default=-0.15,
+                    help="max row/temperature correlation to accept as a body "
+                         "(toggle 'V'). Negative = cools downward.")
+    ap.add_argument("--rigid-bonus", type=int, default=4,
+                    help="peaks credited to a track that demonstrates "
+                         "articulation. Lets a heavily clothed person clear "
+                         "the p-filter on MOTION evidence when the coat has "
+                         "hidden the warm centres. Requires 'R' + 'f'.")
     ap.add_argument("--rigid-frames", type=int, default=8,
                     help="frames of history before the rigidity test is "
                          "allowed to judge a track")
@@ -1624,6 +1740,8 @@ def main():
                          "2 max when multiple people may stand close "
                          "(>=3 merges two people). Live: m / n")
     args = ap.parse_args()
+
+    globals()['DISPLAY_SCALE'] = max(2, int(args.scale))
     global SKIN_BAND_FIXED
     if args.skin_lo is not None or args.skin_hi is not None:
         lo = args.skin_lo if args.skin_lo is not None else SKIN_BAND_C[0]
@@ -1683,6 +1801,7 @@ def main():
     tracker = MultiTracker() if MultiTracker else None
 
     # cursor probe state, filled by the OpenCV mouse callback
+    gnd_cal = []
     probe_on = args.probe
     probe_xy = {"x": None, "y": None}
 
@@ -1749,7 +1868,12 @@ def main():
             flags=flags,
             omega_scale_ratio=args.omega_scale_ratio,
             omega_delta=args.omega_delta,
+            gnd_horizon=args.gnd_horizon, gnd_gain=args.gnd_gain,
+            gnd_tol=args.gnd_tol, vgrad_max=args.vgrad_max,
         )
+
+        if not (flags["kalman"] and tracker is not None):
+            dets = [d for d in dets if not d.get("p_reject")]
 
         # ---- Kalman tracking -------------------------------------------
         # A person persists; clutter flickers. Requiring a track to survive
@@ -1764,14 +1888,43 @@ def main():
                          track_id=t.id, track_hits=t.hits, speed=t.speed,
                          rigidity=t.rigidity(min_frames=args.rigid_frames))
                     for t in tracks]
-            # NON-RIGID GATE. A rigid body's hot spots cannot move relative to
-            # each other; an articulated one's must. rigidity() returns None
-            # until there is enough history — treated as UNKNOWN, never as
-            # rigid, so nothing is dropped on insufficient evidence.
-            if flags["rigid"]:
+            # NON-RIGID GATE, in two directions.
+            #
+            # Demonstrated articulation is positive evidence of a body, so it
+            # pays a BONUS onto the peak count. This is what rescues a heavily
+            # clothed person: the coat hides the warm centres the p-filter
+            # wants, but it cannot hide the fact that the limbs swing. Motion
+            # substitutes for the thermal structure the clothing removed.
+            #
+            # Measured rigidity is negative evidence and still rejects.
+            # rigidity() returns None until there is enough history — treated
+            # as UNKNOWN, never as rigid, so nothing is dropped or credited on
+            # insufficient evidence.
+            if flags["gait"]:
+                for t_ in tracks:
+                    g = t_.gait(fps=max(1.0, fps))
+                    for d in dets:
+                        if d.get("track_id") == t_.id:
+                            d["gait_hz"] = None if g is None else g[0]
+                            d["gait_frac"] = None if g is None else g[1]
                 dets = [d for d in dets
-                        if d.get("rigidity") is None
-                        or d["rigidity"] >= args.rigid_thresh]
+                        if d.get("gait_frac") is None
+                        or d["gait_frac"] >= args.gait_frac]
+
+            if flags["rigid"]:
+                for d in dets:
+                    r = d.get("rigidity")
+                    bonus = args.rigid_bonus if (r is not None and
+                                                 r >= args.rigid_thresh) else 0
+                    d["peaks_bonus"] = bonus
+                    d["peaks_eff"] = d.get("peaks", 0) + bonus
+                dets = [d for d in dets
+                        if (d.get("rigidity") is None
+                            or d["rigidity"] >= args.rigid_thresh)
+                        and (not d.get("p_reject")
+                             or d.get("peaks_eff", 0) > args.p_min)]
+            else:
+                dets = [d for d in dets if not d.get("p_reject")]
 
         now = time.time()
         dt = now - t_last
@@ -1834,6 +1987,15 @@ def main():
                           args.p_min, flags, show_boxes, show_omega,
                           capture_on, capture_n, flags["kalman"],
                           probe_on, probe_xy, data, is_temp)
+        # The panel may be taller than the frame; pad the frame rather than
+        # truncate the panel.
+        H = max(frame.shape[0], sb.shape[0])
+        if frame.shape[0] < H:
+            frame = np.vstack([frame, np.full((H - frame.shape[0],
+                                               frame.shape[1], 3), 12, np.uint8)])
+        if sb.shape[0] < H:
+            sb = np.vstack([sb, np.full((H - sb.shape[0], SIDEBAR_W, 3),
+                                        18, np.uint8)])
         vis = np.hstack([frame, sb])
         if capture_on:
             cv2.circle(vis, (frame.shape[1] - 18, 18), 7, (0, 0, 255), -1)
@@ -1900,6 +2062,21 @@ def main():
         elif k == ord("o"):
             show_boxes = not show_boxes
             print(f"  body boxes {'ON' if show_boxes else 'OFF'}")
+        elif k == ord("C"):
+            # Ground-plane calibration: collect (y_feet, height) pairs and fit
+            # the gain, so the prior is measured on YOUR mount rather than
+            # guessed from trigonometry.
+            for d in dets:
+                x, y, w, h = d["bbox"]
+                gnd_cal.append((y + h, h))
+            if len(gnd_cal) >= 4:
+                a = np.array(gnd_cal, float)
+                gain = float(np.sum(a[:, 0] * a[:, 1]) / max(1e-6, np.sum(a[:, 0] ** 2)))
+                print(f"  ground-plane: {len(gnd_cal)} samples -> "
+                      f"--gnd-gain {gain:.4f}   (horizon assumed row 0)")
+            else:
+                print(f"  ground-plane: {len(gnd_cal)} samples "
+                      f"(need 4+, walk to several distances then press C)")
         elif k == ord("T"):
             probe_on = not probe_on
             print(f"  cursor probe {'ON' if probe_on else 'OFF'}")
