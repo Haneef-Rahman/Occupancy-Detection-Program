@@ -18,6 +18,21 @@ frames: **94.0 % recall, 96.9 % precision**, and clutter false positives reduced
 from 209 to 0 against the same run without the warm-centre filter. Reproduce it
 from [`Thermal/datasets/`](Thermal/datasets/).*
 
+### Best measured configuration
+
+```bash
+./run.sh thermal_detect.py --view any --cohesion 2 --delta 2.5 \
+  --kalman --p-filter --p-min 4
+```
+
+![Best thermal configuration](docs/best_thermal_config.png)
+
+*Live interface. Each processing stage is individually toggleable so its
+contribution can be measured rather than assumed, and the active configuration
+is written into every capture manifest so results stay attributable. Stages off
+in this configuration were tested and did not earn a place — see
+[`Thermal/README.md`](Thermal/README.md).*
+
 ## Repository layout
 
 | Folder | Contents |
