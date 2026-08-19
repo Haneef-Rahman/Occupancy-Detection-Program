@@ -1666,9 +1666,10 @@ def main():
                          "distant people legitimately have one peak")
     ap.add_argument("--kalman", action="store_true",
                     help="start with Kalman tracking on (toggle with 'f')")
-    ap.add_argument("--capture-review", action="store_true",
-                    help="also write review/ with boxes drawn, for eyeballing "
-                         "the auto-labels. Never feed review/ to a trainer.")
+    ap.add_argument("--no-review", action="store_true",
+                    help="skip the review/ folder (boxes drawn, for spotting "
+                         "false positives by eye). Never feed review/ to a "
+                         "trainer.")
     ap.add_argument("--capture-png-overlay", action="store_true",
                     help="save the annotated display instead of a clean frame "
                          "(demo footage, NOT training data)")
@@ -2011,20 +2012,32 @@ def main():
             with open(os.path.join(capture_dir, "labels", fn + ".txt"), "w") as fh:
                 fh.write("\n".join(lines) + ("\n" if lines else ""))
 
-            # Optional QA copy with the boxes drawn, kept OUT of png/ so it can
-            # never be fed to a trainer by accident.
-            if args.capture_review:
-                rv = cv2.resize(colorize(data), (IW * 3, IH * 3),
+            # QA copy with the boxes drawn, kept OUT of png/ so it can never be
+            # fed to a trainer by accident. Flip through this folder, delete the
+            # frames that are wrong, then run prune.py to drop the matching
+            # npy/png/labels files.
+            if not args.no_review:
+                R = 4
+                rv = cv2.resize(colorize(data), (IW * R, IH * R),
                                 interpolation=cv2.INTER_NEAREST)
                 for de in dets:
-                    bx, by, bw, bh = [q * 3 for q in de["bbox"]]
-                    cv2.rectangle(rv, (bx, by), (bx + bw, by + bh), (0, 255, 0), 1)
+                    bx, by, bw, bh = [q * R for q in de["bbox"]]
+                    cv2.rectangle(rv, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+                    cv2.putText(rv, f"{de.get('peaks', 0)}p", (bx, max(12, by - 4)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 3, cv2.LINE_AA)
+                    cv2.putText(rv, f"{de.get('peaks', 0)}p", (bx, max(12, by - 4)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
                     for om in de.get("omegas", []):
                         hb = om.get("head_box")
                         if hb:
-                            hx, hy, hw_, hh_ = [q * 3 for q in hb]
+                            hx, hy, hw_, hh_ = [q * R for q in hb]
                             cv2.rectangle(rv, (hx, hy), (hx + hw_, hy + hh_),
                                           (0, 220, 255), 1)
+                # stamp the frame id so a deleted file is always traceable back
+                cv2.rectangle(rv, (0, 0), (rv.shape[1], 20), (14, 14, 17), -1)
+                cv2.putText(rv, f"{fn}    n={len(dets)}", (6, 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, (210, 210, 220), 1,
+                            cv2.LINE_AA)
                 cv2.imwrite(os.path.join(capture_dir, "review", fn + ".png"), rv)
             if capture_writer:
                 capture_writer.writerow([
@@ -2117,10 +2130,9 @@ def main():
             if capture_on:
                 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 capture_dir = os.path.join(LOG_DIR, f"capture_{stamp}")
-                for sub in ("npy", "png", "labels"):
+                for sub in ("npy", "png", "labels", "review"):
                     os.makedirs(os.path.join(capture_dir, sub), exist_ok=True)
-                if args.capture_review:
-                    os.makedirs(os.path.join(capture_dir, "review"), exist_ok=True)
+                os.makedirs(os.path.join(capture_dir, "review"), exist_ok=True)
                 with open(os.path.join(capture_dir, "classes.txt"), "w") as fh:
                     fh.write("person\nhead_shoulder\n")
                 capture_manifest = open(os.path.join(capture_dir, "manifest.csv"),
