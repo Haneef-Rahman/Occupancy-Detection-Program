@@ -52,6 +52,56 @@ class KalmanTrack:
         self.det = det          # most recent detection payload
         self.history = [(cx, cy)]
 
+        # Peak constellations, centred per frame so global translation is
+        # removed and only INTERNAL deformation remains.
+        self.pk_hist = []
+        self._push_peaks(det)
+
+    def _push_peaks(self, det):
+        pts = det.get("peak_pts")
+        if pts is None or len(pts) < 3:
+            self.pk_hist.append(None)
+        else:
+            p = np.asarray(pts, np.float64)
+            self.pk_hist.append(p - p.mean(axis=0))
+        if len(self.pk_hist) > 40:
+            self.pk_hist.pop(0)
+
+    def rigidity(self, min_frames=8, min_pts=3):
+        """
+        How much the internal peak geometry deforms, as a coefficient of
+        variation of pairwise peak distances.
+
+        A rigid body cannot deform: its hot spots are fixed in the object, so
+        every pairwise distance is constant and this returns ~0 regardless of
+        how many peaks it has. An articulated body cannot help deforming --
+        arms swing, the head turns, hands cross the torso -- so it returns a
+        clearly positive value.
+
+        This is the one measurement that does not care about peak COUNT, which
+        is why it escapes the trap that raising the count also raises it for
+        equipment.
+
+        Returns None until there is enough history to be meaningful; the caller
+        must treat None as "unknown", never as "rigid".
+        """
+        frames = [p for p in self.pk_hist if p is not None]
+        if len(frames) < min_frames:
+            return None
+        m = min(len(p) for p in frames)
+        if m < min_pts:
+            return None
+
+        rows = []
+        for p in frames:
+            # order top-to-bottom so the same physical peak lines up across
+            # frames without needing full correspondence solving
+            q = p[np.argsort(p[:, 1])][:m]
+            d = np.sqrt(((q[:, None, :] - q[None, :, :]) ** 2).sum(-1))
+            rows.append(d[np.triu_indices(m, 1)])
+        D = np.asarray(rows)
+        return float(np.mean(D.std(axis=0) / (D.mean(axis=0) + 1e-6)))
+
     # -- prediction / update -------------------------------------------------
     def predict(self):
         self.x = self.F @ self.x
@@ -74,6 +124,7 @@ class KalmanTrack:
         self.hits += 1
         self.misses = 0
         self.det = det
+        self._push_peaks(det)
         self.history.append((self.x[0], self.x[1]))
         if len(self.history) > 60:
             self.history.pop(0)
@@ -146,6 +197,15 @@ class MultiTracker:
         """Tracks trusted enough to count — the transient-rejection payoff."""
         return [t for t in self.tracks
                 if t.confirmed(self.min_hits) and t.misses == 0]
+
+    def rigid_ids(self, thresh, min_frames=8):
+        """Confirmed tracks whose internal geometry never deforms."""
+        out = []
+        for t in self.tracks:
+            r = t.rigidity(min_frames=min_frames)
+            if r is not None and r < thresh:
+                out.append(t.id)
+        return out
 
     def reset(self):
         self.tracks = []

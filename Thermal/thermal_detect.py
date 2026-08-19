@@ -68,6 +68,7 @@ TOGGLES = [
     ("z", "omega",    "Omega",     True),   # head-shoulder detection
     ("j", "OmScale",  "OmScale",   True),   # drop omegas too small for frame
     ("f", "kalman",   "Kalman",    False),  # temporal tracking
+    ("R", "rigid",    "NonRigid",  False),  # reject rigid peak constellations
     ("B", "static",   "StaticSup", True),   # suppress unmoving objects
 ]
 FLAG_KEYS = {k: name for k, name, _, _ in TOGGLES}
@@ -510,6 +511,33 @@ def split_touching(mask, min_sep=3, neck_ratio=0.72):
         idx += 1
         out[region] = idx
     return out, idx
+
+
+def peak_points(data, ys, xs, prominence=2.5, min_sep=2):
+    """
+    Locations of the warm centres, not just how many.
+
+    thermal_texture answers "how many peaks"; this answers "where". The count
+    is what equipment can imitate — give a laptop more hot spots and it scores
+    like a person. The GEOMETRY of the constellation, tracked over time, is
+    what it cannot imitate, because a rigid object's hot spots cannot move
+    relative to one another.
+    """
+    if xs.size < 4:
+        return np.empty((0, 2), np.float64)
+    patch = np.full(data.shape, -999.0, np.float32)
+    patch[ys, xs] = data[ys, xs]
+    k = 2 * min_sep + 1
+    mx = cv2.dilate(patch, np.ones((k, k), np.uint8))
+    reg = np.zeros(data.shape, bool)
+    reg[ys, xs] = True
+    pk = (patch >= mx - 1e-6) & (patch > data[ys, xs].max() - prominence) & reg
+    n, lab = cv2.connectedComponents(pk.astype(np.uint8))
+    pts = []
+    for i in range(1, n):
+        yy, xx = np.where(lab == i)
+        pts.append((float(xx.mean()), float(yy.mean())))
+    return np.asarray(pts, np.float64) if pts else np.empty((0, 2), np.float64)
 
 
 def thermal_texture(data, ys, xs, prominence=2.5, min_sep=2):
@@ -1057,6 +1085,23 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
     amb_now = float(np.median(data))
     _warm_lbl = [None]        # warm-silhouette labelling, computed on demand
 
+    def _warm_labels():
+        if _warm_lbl[0] is None:
+            wlo = amb_now + omega_delta
+            wm = ((data >= wlo) & (data <= tmax)) if tmax is not None \
+                else (data >= wlo)
+            wm = cv2.morphologyEx(wm.astype(np.uint8), cv2.MORPH_CLOSE,
+                                  np.ones((3, 3), np.uint8))
+            _warm_lbl[0] = cv2.connectedComponents(wm)[1]
+        return _warm_lbl[0]
+
+    def _warm_of(hot_sub):
+        """The connected warm body containing this hot blob."""
+        lbl = _warm_labels()
+        ids, cnt = np.unique(lbl[hot_sub > 0], return_counts=True)
+        keep = [i for i in ids[np.argsort(-cnt)] if i != 0]
+        return (lbl == keep[0]).astype(np.uint8) * 255 if keep else hot_sub
+
     # ---- BODY EXTENSION (recover clothed torso / legs / feet) ---------------
     # A hoodie or jeans sits only 2-4 C above ambient, below the detection
     # threshold, so only the head survives and the blob has too few warm
@@ -1106,6 +1151,30 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         else:
             npk, sd, rg = 1, 0.0, 0.0
         d["peaks"], d["std_c"], d["range_c"] = int(npk), float(sd), float(rg)
+        # Peak GEOMETRY for the temporal rigidity test — measured on the WARM
+        # silhouette, not the hot mask. The hot mask is face and hands only;
+        # its peaks sit inside the head and barely move relative to each other,
+        # so a walking person scores nearly as rigid as a laptop. The limbs are
+        # where articulation actually shows, and they only exist in the warm
+        # mask.
+        if tmin is not None and xs_.size:
+            hs = np.zeros(mask.shape, np.uint8)
+            hs[y:y + h, x:x + w] = binm[y:y + h, x:x + w] * 255
+            wsub = _warm_of(hs)
+            # Clip to a generous neighbourhood of this blob. Where a person
+            # stands next to warm equipment the two silhouettes merge into one
+            # component, and without this the equipment track inherits the
+            # person's limb articulation and scores as non-rigid.
+            gx, gy = int(w * 0.75) + 4, int(h * 0.75) + 4
+            box = np.zeros(mask.shape, bool)
+            box[max(0, y - gy):y + h + gy, max(0, x - gx):x + w + gx] = True
+            wsub = wsub * box
+            wys, wxs = np.where(wsub > 0)
+            d["peak_pts"] = (peak_points(data, wys, wxs) if wxs.size
+                             else np.empty((0, 2), np.float64))
+        else:
+            d["peak_pts"] = (peak_points(data, ys_, xs_) if xs_.size
+                             else np.empty((0, 2), np.float64))
 
         # Head-shoulder omegas.
         #
@@ -1121,20 +1190,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             # The warm silhouette must be the WHOLE connected warm body, not a
             # padded crop of the hot head — otherwise the shoulder measurement
             # is taken across the head itself and the ratio is meaningless.
-            if _warm_lbl[0] is None:
-                wlo = amb_now + omega_delta
-                wm = ((data >= wlo) & (data <= tmax)) if tmax is not None \
-                    else (data >= wlo)
-                wm = cv2.morphologyEx(wm.astype(np.uint8), cv2.MORPH_CLOSE,
-                                      np.ones((3, 3), np.uint8))
-                _warm_lbl[0] = cv2.connectedComponents(wm)[1]
-            lbl = _warm_lbl[0]
-            ids, cnt = np.unique(lbl[hot_sub > 0], return_counts=True)
-            keep = [i for i in ids[np.argsort(-cnt)] if i != 0]
-            if keep:
-                warm_sub = (lbl == keep[0]).astype(np.uint8) * 255
-            else:
-                warm_sub = hot_sub
+            warm_sub = _warm_of(hot_sub)
             try:
                 oms = SF.find_omegas_thermal(warm_sub, hot_sub)
             except Exception:
@@ -1436,9 +1492,11 @@ def draw_sidebar(h, dets, bg, thr, sens, is_temp, fps, logging_on, view,
             pri = "*" if d.get("priority") else " "
             oc = d.get("omega_count", 0)
             tid = f"#{d['track_id']}" if "track_id" in d else "  "
+            rg = d.get("rigidity")
+            rgs = f" r{rg:.3f}" if rg is not None else ""
             _line(sb, y, f"{tid:>4}{pri} {d['val_max']:4.1f}C "
                          f"{d.get('peaks', 0):2d}p {d['area_px']:4d}px"
-                         + (f" {oc}w" if oc else ""),
+                         + (f" {oc}w" if oc else "") + rgs,
                   (0, 255, 255) if d.get("priority") else _C_TEXT, sc=0.38)
             y += 16
         if len(dets) > room:
@@ -1460,7 +1518,7 @@ HELP = """
   STAGE TOGGLES (each shown along the bottom of the view):
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
-    z Omega      j OmScale    f Kalman     B StaticSup
+    z Omega      j OmScale    f Kalman     R NonRigid   B StaticSup
 
   T cursor TEMPERATURE PROBE (hover to read the exact pixel value)
   a print background/threshold | r cycle display (color/mask/both)
@@ -1514,6 +1572,17 @@ def main():
                     help="start with Kalman tracking on (toggle with 'f')")
     ap.add_argument("--capture-every", type=int, default=1,
                     help="during capture, save every Nth frame (default 1)")
+    ap.add_argument("--rigid-thresh", type=float, default=0.005,
+                    help="peak-constellation deformation below this is treated "
+                         "as a rigid object (toggle 'R'). Synthetic: walking "
+                         "person 0.011, static laptop 0.000, STILL person "
+                         "0.000. MEASURE both classes on your own footage "
+                         "first — the sidebar shows the live value as 'r'. "
+                         "Sensor noise puts a nonzero floor under equipment "
+                         "that this synthetic cannot predict.")
+    ap.add_argument("--rigid-frames", type=int, default=8,
+                    help="frames of history before the rigidity test is "
+                         "allowed to judge a track")
     ap.add_argument("--probe", action="store_true",
                     help="start with the cursor temperature probe on "
                          "(toggle with 'T')")
@@ -1692,8 +1761,17 @@ def main():
             tracker.update(dets)
             tracks = tracker.confirmed()
             dets = [dict(t.det, bbox=t.bbox, centroid=t.centroid,
-                         track_id=t.id, track_hits=t.hits,
-                         speed=t.speed) for t in tracks]
+                         track_id=t.id, track_hits=t.hits, speed=t.speed,
+                         rigidity=t.rigidity(min_frames=args.rigid_frames))
+                    for t in tracks]
+            # NON-RIGID GATE. A rigid body's hot spots cannot move relative to
+            # each other; an articulated one's must. rigidity() returns None
+            # until there is enough history — treated as UNKNOWN, never as
+            # rigid, so nothing is dropped on insufficient evidence.
+            if flags["rigid"]:
+                dets = [d for d in dets
+                        if d.get("rigidity") is None
+                        or d["rigidity"] >= args.rigid_thresh]
 
         now = time.time()
         dt = now - t_last
