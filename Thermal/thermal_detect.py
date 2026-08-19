@@ -66,6 +66,7 @@ TOGGLES = [
     ("i", "skin",     "SkinPrio",  True),   # skin band grants immunity
     ("x", "extend",   "BodyExt",   False),  # grow onto clothed torso/legs
     ("z", "omega",    "Omega",     True),   # head-shoulder detection
+    ("j", "OmScale",  "OmScale",   True),   # drop omegas too small for frame
     ("f", "kalman",   "Kalman",    False),  # temporal tracking
     ("B", "static",   "StaticSup", True),   # suppress unmoving objects
 ]
@@ -881,7 +882,8 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   cohesion=1, tmin=None, min_peaks=None, peak_check_area=None,
                   body_min_area=14, body_min_c=29.0, moving=None,
                   equip_thresh=3.0, p_filter=False, p_min=5,
-                  body_extend=False, body_delta=2.0, flags=None):
+                  body_extend=False, body_delta=2.0, flags=None,
+                 omega_scale_ratio=0.40):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
 
@@ -1116,6 +1118,16 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             d["omega_count"] = len(oms)
             d["omega_score"] = float(oms[0]["score"]) if oms else 0.0
 
+    # Scale consistency across the frame. A laptop hotspot can trace a dome
+    # that passes the local ratio test but at a fraction of head size; only a
+    # comparison BETWEEN omegas exposes that, since each descriptor on its own
+    # is deliberately scale-invariant.
+    if SF is not None and F["omega"] and F["OmScale"]:
+        try:
+            SF.suppress_small_omegas(dets, min_ratio=omega_scale_ratio)
+        except Exception:
+            pass
+
     # Single-hot-object rejection.
     #
     # Measured on real captures vs synthetic objects:
@@ -1258,7 +1270,7 @@ HELP = """
   STAGE TOGGLES (each shown along the bottom of the view):
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
-    z Omega      f Kalman     B StaticSup
+    z Omega      j OmScale    f Kalman     B StaticSup
   a print background/threshold | r cycle display (color/mask/both)
 """
 
@@ -1310,6 +1322,11 @@ def main():
                     help="start with Kalman tracking on (toggle with 'f')")
     ap.add_argument("--capture-every", type=int, default=1,
                     help="during capture, save every Nth frame (default 1)")
+    ap.add_argument("--omega-scale-ratio", type=float, default=0.40,
+                    help="omegas narrower than this fraction of the frame's "
+                         "largest confident omega are discarded (toggle 'j'). "
+                         "Also caps range spread: 0.40 keeps a person 2.5x "
+                         "further than the nearest one.")
     ap.add_argument("--omega-only", action="store_true",
                     help="start with body boxes hidden and only the omega "
                          "overlay drawn — the capture view")
@@ -1451,6 +1468,7 @@ def main():
             body_extend=flags['extend'],
             body_delta=args.body_delta,
             flags=flags,
+            omega_scale_ratio=args.omega_scale_ratio,
         )
 
         # ---- Kalman tracking -------------------------------------------

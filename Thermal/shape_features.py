@@ -611,6 +611,57 @@ def omega_score(mask):
                 omega_ratio=om[0]["ratio"])
 
 
+def suppress_small_omegas(dets, min_ratio=0.40, min_ref_px=6.0, min_ref_score=0.35):
+    """
+    Frame-level scale consistency for omegas.
+
+    A head has a real physical size. Within one frame, every head sits at a
+    comparable range, so head breadths cluster. A laptop's hot patch can trace
+    a dome that passes the local anthropometric ratio test, but it does so at
+    the wrong SCALE — the dome is a few pixels where a real head is ten or
+    more. Local shape descriptors cannot see this, because scale invariance is
+    exactly what they were designed to throw away. Comparing omegas against
+    each other puts the scale information back.
+
+    Rule: if the frame contains a confident, reasonably large omega, discard
+    every omega narrower than `min_ratio` of it.
+
+    The cost is explicit and worth stating: head breadth scales as 1/range, so
+    `min_ratio` also sets how much range spread survives. At the 0.40 default a
+    person 2.5x further away than the nearest one is still kept; beyond that
+    they are discarded with the laptop. In a corridor that is generous; across
+    a large hall it is not, and the ratio should be lowered.
+
+    Requires a reference of at least `min_ref_px` and score `min_ref_score` —
+    with no big confident omega in frame there is nothing to be small relative
+    TO, and the filter correctly does nothing. This is what stops it wiping out
+    a lone distant person in an otherwise empty frame.
+
+    Mutates dets in place; returns (n_dropped, reference_width).
+    """
+    widths = [om["head_w"] for d in dets for om in d.get("omegas", [])
+              if om.get("score", 0.0) >= min_ref_score]
+    if not widths:
+        return 0, 0.0
+
+    ref = max(widths)
+    if ref < min_ref_px:
+        return 0, float(ref)
+
+    cut = min_ratio * ref
+    dropped = 0
+    for d in dets:
+        oms = d.get("omegas", [])
+        if not oms:
+            continue
+        keep = [om for om in oms if om["head_w"] >= cut]
+        dropped += len(oms) - len(keep)
+        d["omegas"] = keep
+        d["omega_count"] = len(keep)
+        d["omega_score"] = float(keep[0]["score"]) if keep else 0.0
+    return dropped, float(ref)
+
+
 def body_extension(data, hot_mask, ambient_c, low_delta=2.0, tmax=None,
                    min_growth=1.6, max_growth=25.0):
     """
