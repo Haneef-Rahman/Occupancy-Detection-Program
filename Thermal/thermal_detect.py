@@ -211,11 +211,22 @@ SHAPE_RULES = {
                        surface="hair",       # overhead you see the scalp
                        reject_equipment=True,
                        label="VERT (down)"),
-    "horizontal": dict(aspect_min=1.1,  aspect_max=6.0, extent_min=0.25,
+    # Retuned for RANGE. The old gate (aspect_min 1.1, extent_min 0.25, 3 peaks
+    # above 150 px) assumed you always see a whole standing body: taller than
+    # wide, multi-peaked. Past roughly 2.5 m you do not — the clothed torso
+    # falls below threshold and what survives is a head plus hands, which is
+    # roughly SQUARE. aspect_min 1.1 rejected that outright, so detection
+    # stopped abruptly instead of degrading.
+    #
+    # Relaxing shape is safer here than it looks: distant blobs are small, and
+    # small blobs are already held in by the absolute temperature band, which
+    # is what rejects clutter. cluster_small is now on so a face and two hands
+    # rejoin into one person rather than being three fragments that each fail.
+    "horizontal": dict(aspect_min=0.65, aspect_max=6.0, extent_min=0.18,
                        merge_axis="vertical",  # stacked = one body
                        min_sep_px=0,
-                       cluster_small=False, small_area=0, cluster_radius=0,
-                       delta=4.0, min_peaks=3, peak_check_area=150,
+                       cluster_small=True, small_area=48, cluster_radius=18,
+                       delta=3.0, min_peaks=2, peak_check_area=420,
                        surface="skin",       # forward you see faces/hands
                        reject_equipment=True,
                        label="HORIZ (fwd)"),
@@ -1837,6 +1848,9 @@ def main():
                     help="degrees above ambient defining the WARM silhouette "
                          "the omega is fitted to (hair/scalp + clothed "
                          "shoulders). The hot face anchors it from inside.")
+    ap.add_argument("--h-strict", action="store_true",
+                    help="restore the old close-range horizontal gates "
+                         "(aspect>=1.1, extent>=0.25, 3 peaks above 150 px)")
     ap.add_argument("--omega-max-tilt", type=float, default=40.0,
                     help="degrees of head-tilt the rotated omega search covers "
                          "(toggle 'N'). Wider costs proportionally more time.")
@@ -1876,6 +1890,10 @@ def main():
     args = ap.parse_args()
 
     globals()['DISPLAY_SCALE'] = max(2, int(args.scale))
+    if args.h_strict:
+        SHAPE_RULES["horizontal"].update(
+            aspect_min=1.1, extent_min=0.25, min_peaks=3,
+            peak_check_area=150, cluster_small=False, delta=4.0)
     global SKIN_BAND_FIXED
     if args.skin_lo is not None or args.skin_hi is not None:
         lo = args.skin_lo if args.skin_lo is not None else SKIN_BAND_C[0]
