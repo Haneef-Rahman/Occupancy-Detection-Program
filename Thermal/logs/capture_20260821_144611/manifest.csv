@@ -1,0 +1,6 @@
+file,timestamp,view,background,threshold,n_det,omega_count,omega_score,flags,note
+cap_000000,2026-08-21T14:46:11.689,horizontal,23.86,26.36,1,1,0.8886118908204519,TempBand+Watershed+Merge+ClustSml+ShapeGate+MinPeaks+P-Filter+EquipRej+SkinPrio+Omega+OmScale+OmSplit+OmRot+FarField+Kalman+StaticSup,run2 pfilter4
+cap_000001,2026-08-21T14:46:11.770,horizontal,23.84,26.34,1,1,0.8712718672416164,TempBand+Watershed+Merge+ClustSml+ShapeGate+MinPeaks+P-Filter+EquipRej+SkinPrio+Omega+OmScale+OmSplit+OmRot+FarField+Kalman+StaticSup,run2 pfilter4
+cap_000002,2026-08-21T14:46:11.895,horizontal,23.84,26.34,1,1,0.8941979746564728,TempBand+Watershed+Merge+ClustSml+ShapeGate+MinPeaks+P-Filter+EquipRej+SkinPrio+Omega+OmScale+OmSplit+OmRot+FarField+Kalman+StaticSup,run2 pfilter4
+cap_000003,2026-08-21T14:46:11.992,horizontal,23.84,26.34,1,1,0.8889480021227119,TempBand+Watershed+Merge+ClustSml+ShapeGate+MinPeaks+P-Filter+EquipRej+SkinPrio+Omega+OmScale+OmSplit+OmRot+FarField+Kalman+StaticSup,run2 pfilter4
+cap_000004,2026-08-21T14:46:12.120,horizontal,23.84,26.34,1,1,0.8528176870545242,TempBand+Watershed+Merge+ClustSml+ShapeGate+MinPeaks+P-Filter+EquipRej+SkinPrio+Omega+OmScale+OmSplit+OmRot+FarField+Kalman+StaticSup,run2 pfilter4
