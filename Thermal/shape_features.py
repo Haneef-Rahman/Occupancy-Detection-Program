@@ -739,6 +739,121 @@ def find_omegas_thermal(warm_mask, hot_mask, min_prominence=0.22,
     return out
 
 
+def _principal_tilt(mask):
+    """
+    Tilt of the blob's major axis away from vertical, in degrees.
+
+    Second-order image moments give the orientation of the shape's long axis
+    without any search. For a standing body that axis runs head-to-foot, so the
+    deviation from vertical is a free first guess at how much the person is
+    leaning — or how much the camera is rolled.
+    """
+    m = cv2.moments((mask > 0).astype(np.uint8))
+    if m["m00"] <= 0:
+        return 0.0
+    mu20 = m["mu20"] / m["m00"]
+    mu02 = m["mu02"] / m["m00"]
+    mu11 = m["mu11"] / m["m00"]
+    if abs(mu20 - mu02) < 1e-9 and abs(mu11) < 1e-9:
+        return 0.0
+    theta = 0.5 * np.arctan2(2.0 * mu11, mu20 - mu02)       # major axis vs +x
+    tilt = np.degrees(theta) + 90.0                          # vs vertical
+    while tilt > 90.0:
+        tilt -= 180.0
+    while tilt <= -90.0:
+        tilt += 180.0
+    return float(tilt)
+
+
+def find_omegas_rotated(warm_mask, hot_mask, max_tilt=40.0, step=15.0,
+                        **kw):
+    """
+    Rotation-invariant omega search.
+
+    find_omegas_thermal reads the topmost filled pixel in each COLUMN, so it
+    silently assumes the head is at the top of the image. A person leaning, a
+    tilted mount, or the 30-degree downward pitch of the FLUXNET node all break
+    that assumption, and the omega simply disappears — the descriptor is
+    invariant to scale and to shape deformation, but not to rotation.
+
+    Fix: rotate the masks, not the descriptor. Candidate angles are the blob's
+    own principal-axis tilt (free, from second moments) plus a coarse sweep, and
+    the angle scoring highest wins. Geometry is mapped back to image
+    coordinates, so callers get boxes in the original frame.
+
+    Each returned omega gains:
+        angle      degrees the frame was rotated to find it
+        head_quad  4x2 corners of the head box in ORIGINAL image coordinates
+        head_box   axis-aligned bounding rect of that quad
+    """
+    cands = {0.0}
+    t = _principal_tilt(warm_mask)
+    if abs(t) <= max_tilt:
+        cands.add(round(t, 1))
+    a = -max_tilt
+    while a <= max_tilt + 1e-6:
+        cands.add(round(a, 1))
+        a += step
+
+    h, w = warm_mask.shape[:2]
+    ys, xs = np.where(warm_mask > 0)
+    if xs.size == 0:
+        return []
+    cx, cy = float(xs.mean()), float(ys.mean())
+
+    best, best_score, best_ang, best_M = [], -1.0, 0.0, None
+    for ang in sorted(cands):
+        if abs(ang) < 1e-6:
+            wr, hr, M = warm_mask, hot_mask, None
+        else:
+            M = cv2.getRotationMatrix2D((cx, cy), ang, 1.0)
+            wr = cv2.warpAffine(warm_mask, M, (w, h), flags=cv2.INTER_NEAREST)
+            hr = cv2.warpAffine(hot_mask, M, (w, h), flags=cv2.INTER_NEAREST)
+        oms = find_omegas_thermal(wr, hr, **kw)
+        if not oms:
+            continue
+        # rank on the best dome, tie-broken by how many were found: two heads
+        # correctly resolved beats one head found slightly more confidently
+        score = max(o["score"] for o in oms) + 0.05 * (len(oms) - 1)
+        if score > best_score:
+            best, best_score, best_ang, best_M = oms, score, ang, M
+
+    if not best:
+        return []
+
+    if best_M is None:
+        for o in best:
+            o["angle"] = 0.0
+            hx, hy, hw_, hh_ = o["head_box"]
+            o["head_quad"] = np.array([[hx, hy], [hx + hw_, hy],
+                                       [hx + hw_, hy + hh_], [hx, hy + hh_]],
+                                      np.float32)
+        return best
+
+    # invert the rotation to bring geometry back into the original frame
+    inv = cv2.invertAffineTransform(best_M)
+
+    def back(px, py):
+        return (float(inv[0, 0] * px + inv[0, 1] * py + inv[0, 2]),
+                float(inv[1, 0] * px + inv[1, 1] * py + inv[1, 2]))
+
+    out = []
+    for o in best:
+        hx, hy, hw_, hh_ = o["head_box"]
+        quad = np.array([back(hx, hy), back(hx + hw_, hy),
+                         back(hx + hw_, hy + hh_), back(hx, hy + hh_)], np.float32)
+        qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
+        qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
+        o["angle"] = float(best_ang)
+        o["head_quad"] = quad
+        o["head_box"] = (int(max(0, qx0)), int(max(0, qy0)),
+                         int(max(1, qx1 - qx0)), int(max(1, qy1 - qy0)))
+        o["core_x"], o["core_y"] = back(o["core_x"], o["core_y"])
+        o["x"] = int(back(o["x"], hy + hh_ / 2.0)[0])
+        out.append(o)
+    return out
+
+
 def suppress_small_omegas(dets, min_ratio=0.40, min_ref_px=6.0, min_ref_score=0.35):
     """
     Frame-level scale consistency for omegas.

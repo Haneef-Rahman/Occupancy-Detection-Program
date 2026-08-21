@@ -68,6 +68,7 @@ TOGGLES = [
     ("z", "omega",    "Omega",     True),   # head-shoulder detection
     ("j", "OmScale",  "OmScale",   True),   # drop omegas too small for frame
     ("S", "osplit",   "OmSplit",   True),   # one box per omega inside a blob
+    ("N", "orot",     "OmRot",     True),   # rotation-invariant omega search
     ("f", "kalman",   "Kalman",    False),  # temporal tracking
     ("R", "rigid",    "NonRigid",  False),  # reject rigid peak constellations
     ("G", "ground",   "GndPlane",  False),  # ground-plane scale consistency
@@ -922,6 +923,7 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   body_extend=False, body_delta=2.0, flags=None,
                   omega_scale_ratio=0.40, omega_delta=2.0,
                   gnd_horizon=0.0, gnd_gain=0.0, gnd_tol=0.5,
+                  omega_max_tilt=40.0,
                   vgrad_max=-0.15):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
@@ -1241,7 +1243,11 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             # is taken across the head itself and the ratio is meaningless.
             warm_sub = _warm_of(hot_sub)
             try:
-                oms = SF.find_omegas_thermal(warm_sub, hot_sub)
+                if F["orot"]:
+                    oms = SF.find_omegas_rotated(warm_sub, hot_sub,
+                                                 max_tilt=omega_max_tilt)
+                else:
+                    oms = SF.find_omegas_thermal(warm_sub, hot_sub)
             except Exception:
                 oms = []
             d["omegas"] = oms
@@ -1467,22 +1473,29 @@ def draw_omega(vis, dets, S=1):
             else:
                 cxh, cyh, ax, ay = x, (d["bbox"][1] * S) + hw, hw, hw
 
-            # head dome: upper half-ellipse over the scalp
-            cv2.ellipse(vis, (cxh, cyh), (ax, ay), 0, 180, 360,
+            # Draw at the angle the omega was actually found at, so a leaning
+            # person gets a leaning omega rather than an upright one that does
+            # not match the body.
+            rot = float(om.get("angle", 0.0))
+            th = np.radians(-rot)
+            cs, sn = np.cos(th), np.sin(th)
+
+            def rp(dx, dy):
+                return (int(cxh + dx * cs - dy * sn), int(cyh + dx * sn + dy * cs))
+
+            cv2.ellipse(vis, (cxh, cyh), (ax, ay), -rot, 180, 360,
                         (0, 220, 255), 2, cv2.LINE_AA)
-            # shoulder legs: from the dome's sides, out and down
-            cv2.line(vis, (cxh - ax, cyh), (cxh - sw, cyh + ay), (0, 220, 255), 2, cv2.LINE_AA)
-            cv2.line(vis, (cxh + ax, cyh), (cxh + sw, cyh + ay), (0, 220, 255), 2, cv2.LINE_AA)
-            # shoulder line
-            cv2.line(vis, (cxh - sw, cyh + ay), (cxh + sw, cyh + ay),
-                     (0, 180, 210), 1, cv2.LINE_AA)
+            cv2.line(vis, rp(-ax, 0), rp(-sw, ay), (0, 220, 255), 2, cv2.LINE_AA)
+            cv2.line(vis, rp(ax, 0), rp(sw, ay), (0, 220, 255), 2, cv2.LINE_AA)
+            cv2.line(vis, rp(-sw, ay), rp(sw, ay), (0, 180, 210), 1, cv2.LINE_AA)
 
             # the hot face anchor, inside the dome
             if "core_x" in om:
                 cv2.drawMarker(vis, (int(om["core_x"] * S), int(om["core_y"] * S)),
                                (60, 60, 255), cv2.MARKER_TILTED_CROSS, 12, 2)
 
-            lbl = f"{om['score']:.2f}"
+            rr = om.get("angle", 0.0)
+            lbl = f"{om['score']:.2f}" + (f" {rr:+.0f}deg" if abs(rr) >= 1 else "")
             cv2.putText(vis, lbl, (cxh - 16, max(14, cyh - ay - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(vis, lbl, (cxh - 16, max(14, cyh - ay - 6)),
@@ -1711,7 +1724,8 @@ HELP = """
   STAGE TOGGLES (each shown along the bottom of the view):
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
-    z Omega      j OmScale    S OmSplit    f Kalman     R NonRigid
+    z Omega      j OmScale    S OmSplit    N OmRot      f Kalman
+    R NonRigid
     G GndPlane   A Gait       V VGrad      B StaticSup
     G GndPlane   A Gait       V VGrad
 
@@ -1823,6 +1837,9 @@ def main():
                     help="degrees above ambient defining the WARM silhouette "
                          "the omega is fitted to (hair/scalp + clothed "
                          "shoulders). The hot face anchors it from inside.")
+    ap.add_argument("--omega-max-tilt", type=float, default=40.0,
+                    help="degrees of head-tilt the rotated omega search covers "
+                         "(toggle 'N'). Wider costs proportionally more time.")
     ap.add_argument("--omega-scale-ratio", type=float, default=0.40,
                     help="omegas narrower than this fraction of the frame's "
                          "largest confident omega are discarded (toggle 'j'). "
@@ -1987,6 +2004,7 @@ def main():
             omega_delta=args.omega_delta,
             gnd_horizon=args.gnd_horizon, gnd_gain=args.gnd_gain,
             gnd_tol=args.gnd_tol, vgrad_max=args.vgrad_max,
+            omega_max_tilt=args.omega_max_tilt,
         )
 
         if not (flags["kalman"] and tracker is not None):
