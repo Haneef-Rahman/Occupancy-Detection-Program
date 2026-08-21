@@ -69,6 +69,7 @@ TOGGLES = [
     ("j", "OmScale",  "OmScale",   True),   # drop omegas too small for frame
     ("S", "osplit",   "OmSplit",   True),   # one box per omega inside a blob
     ("N", "orot",     "OmRot",     True),   # rotation-invariant omega search
+    ("F", "farfield", "FarField",  True),   # distant small-blob pass (horiz)
     ("f", "kalman",   "Kalman",    False),  # temporal tracking
     ("R", "rigid",    "NonRigid",  False),  # reject rigid peak constellations
     ("G", "ground",   "GndPlane",  False),  # ground-plane scale consistency
@@ -935,6 +936,8 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   omega_scale_ratio=0.40, omega_delta=2.0,
                   gnd_horizon=0.0, gnd_gain=0.0, gnd_tol=0.5,
                   omega_max_tilt=40.0,
+                  far_delta=2.0, far_min_area=5, far_max_area=90,
+                  far_contrast=2.5, far_row_max=0.55,
                   vgrad_max=-0.15):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
@@ -1391,7 +1394,8 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         # cut out of a merged pair legitimately carries fewer centres than the
         # pair did.
         dets = [d for d in dets
-                if d.get("priority") or d["area_px"] < pca or d["peaks"] >= mp
+                if d.get("priority") or d.get("far_field")
+                or d["area_px"] < pca or d["peaks"] >= mp
                 or (d.get("omega_split") and d.get("omega_score", 0.0) >= 0.5)]
 
     # ---- P-FILTER (all view modes, toggled with 'p') ------------------------
@@ -1410,9 +1414,11 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
             # it readmission. Tag it and let the main loop decide once the
             # tracker has evidence.
             for d in dets:
-                d["p_reject"] = d.get("peaks", 0) <= p_min
+                d["p_reject"] = (d.get("peaks", 0) <= p_min
+                                 and not d.get("far_field"))
         else:
-            dets = [d for d in dets if d.get("peaks", 0) > p_min]
+            dets = [d for d in dets
+                    if d.get("peaks", 0) > p_min or d.get("far_field")]
 
     # ---- GROUND-PLANE SCALE PRIOR (toggle 'G') -----------------------------
     # With a fixed camera, a person standing on the floor has a DETERMINED
@@ -1442,6 +1448,133 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         # Negative correlation = cooling downward = body-like.
         dets = [d for d in dets
                 if d.get("area_px", 0) < 60 or d.get("vgrad", 0.0) <= vgrad_max]
+
+    # ---- FAR FIELD (horizontal only, toggle 'F') ---------------------------
+    # Runs LAST, on what the near-body gates discarded. Placing it earlier
+    # meant a distant blob was still sitting in dets when the pass built its
+    # exclusion mask, so the pass skipped the very blobs it exists to rescue,
+    # and only got rid of them a few lines later.
+    #
+    # A person at range is not a small version of a person up close. The
+    # clothed torso drops below threshold first, then the hands, and what
+    # survives is a few pixels of face — mixed with cool background inside each
+    # pixel, so even the peak temperature falls. By the time someone is across
+    # a room they present as a compact warm island of 5-60 px with one warm
+    # centre, which every gate tuned for a near body rejects: too small, too
+    # few peaks, no meaningful aspect ratio.
+    #
+    # So this is a SEPARATE pass with its own evidence, not a relaxation of the
+    # main one. The discriminator for a blob this small is LOCAL CONTRAST: a
+    # distant body is a warm island standing clear of the surface behind it,
+    # while sensor noise and gradual warm patches are not. Anything found here
+    # is flagged far_field and is exempt from the near-body gates, because
+    # those gates measure structure that genuinely is not resolvable.
+    if F["farfield"] and view == "horizontal" and tmin is not None:
+        # Exclude only what a SURVIVING detection already claims, not the whole
+        # threshold mask. A distant person usually does clear the main
+        # threshold — they are then thrown out by the near-body gates. Masking
+        # off the entire mask meant those blobs were excluded from the pass
+        # built to rescue them.
+        # Exclude only what a SURVIVING detection already claims, not the whole
+        # threshold mask — a distant person usually does clear the threshold and
+        # is then thrown out by the near-body gates, so masking the whole mask
+        # would skip the very blobs this pass exists to rescue.
+        #
+        # The margin is generous because the dominant false positive here is a
+        # HAND or FOOT of an already-detected person poking outside their box.
+        # That is not a second person, and at this blob size nothing about the
+        # fragment itself says so — only its proximity does.
+        taken = np.zeros(mask.shape, np.uint8)
+        near_boxes = []
+        for d in dets:
+            bx_, by_, bw_, bh_ = d["bbox"]
+            pad = max(6, int(0.35 * max(bw_, bh_)))
+            taken[max(0, by_ - pad):by_ + bh_ + pad,
+                  max(0, bx_ - pad):bx_ + bw_ + pad] = 1
+            near_boxes.append((bx_, by_, bw_, bh_, pad))
+        flo = amb_now + far_delta
+        fhi = tmax if tmax is not None else 60.0
+        fm = ((data >= flo) & (data <= fhi) & (taken == 0)).astype(np.uint8)
+        if moving is not None:
+            # A distant person crossing a room is moving; a warm patch on a
+            # wall is not. At this blob size motion is the only other evidence
+            # available, and without it the pass fires on room clutter.
+            fm = fm * (moving > 0).astype(np.uint8)
+        fm = cv2.morphologyEx(fm, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+        nlab, lab, stats, cents = cv2.connectedComponentsWithStats(fm, 8)
+
+        IMH = float(data.shape[0])
+        for li in range(1, nlab):
+            a = int(stats[li, cv2.CC_STAT_AREA])
+            bx = int(stats[li, cv2.CC_STAT_LEFT]); by = int(stats[li, cv2.CC_STAT_TOP])
+            bw = int(stats[li, cv2.CC_STAT_WIDTH]); bh = int(stats[li, cv2.CC_STAT_HEIGHT])
+
+            # ---- PERSPECTIVE GATE ----------------------------------------
+            # Looking forward, distance grows as you go UP the frame: the
+            # bottom of the image is the floor at your feet, the top is the far
+            # wall. So a blob's expected size is a function of its row, and
+            # "small" only means "distant" in the upper part of the frame.
+            #
+            # A 20 px blob near the bottom is NOT a distant person — at that
+            # range a person fills a third of the frame. It is a hand, a foot,
+            # or clutter. Rejecting it here is what stops the far-field pass
+            # from firing all over the near field.
+            #
+            # In the upper band the ceiling on area grows linearly downward,
+            # because a person one row lower is one step closer and subtends
+            # proportionally more pixels.
+            fy = (by + bh) / max(1.0, IMH)          # feet row, normalised
+            if fy > far_row_max:
+                continue                             # near field: not our job
+            span = max(1e-3, far_row_max)
+            cap = far_max_area * (0.35 + 1.30 * (fy / span))
+            if not (far_min_area <= a <= cap):
+                continue
+
+            # A distant body is blobby, not a thin streak along a warm edge.
+            if a / max(1.0, float(bw * bh)) < 0.42:
+                continue
+            if max(bw, bh) / max(1.0, min(bw, bh)) > 3.2:
+                continue
+
+            m_i = lab == li
+            ys_i, xs_i = np.where(m_i)
+            vals = data[ys_i, xs_i]
+
+            # LOCAL CONTRAST: blob against the ring immediately around it.
+            # Referencing the ring rather than the frame ambient is what makes
+            # this work on a warm wall or a sunlit floor.
+            gx0, gy0 = max(0, bx - 4), max(0, by - 4)
+            gx1, gy1 = min(data.shape[1], bx + bw + 4), min(data.shape[0], by + bh + 4)
+            ring = np.ones((gy1 - gy0, gx1 - gx0), bool)
+            ring[by - gy0:by - gy0 + bh, bx - gx0:bx - gx0 + bw] = False
+            rv = data[gy0:gy1, gx0:gx1][ring]
+            if rv.size < 8:
+                continue
+            contrast = float(vals.mean() - np.median(rv))
+            if contrast < far_contrast:
+                continue
+
+            # second proximity guard, on the blob's own centroid
+            fcx, fcy = float(xs_i.mean()), float(ys_i.mean())
+            if any(bx_ - pad <= fcx <= bx_ + bw_ + pad and
+                   by_ - pad <= fcy <= by_ + bh_ + pad
+                   for bx_, by_, bw_, bh_, pad in near_boxes):
+                continue
+
+            npk3, sd3, rg3 = thermal_texture(data, ys_i, xs_i)
+            dets.append(dict(
+                bbox=(bx, by, bw, bh), area_px=a,
+                centroid=(float(xs_i.mean()), float(ys_i.mean())),
+                val_max=float(vals.max()), val_mean=float(vals.mean()),
+                aspect=float(bh) / max(1.0, float(bw)),
+                extent=a / max(1.0, float(bw * bh)),
+                rect_fill=a / max(1.0, float(bw * bh)),
+                peaks=int(npk3), std_c=float(sd3), range_c=float(rg3),
+                peak_pts=peak_points(data, ys_i, xs_i),
+                omegas=[], omega_count=0, omega_score=0.0,
+                far_field=True, far_contrast=contrast,
+                priority=False, extended=False))
 
     dets.sort(key=lambda d: (d.get("priority", False), d["area_px"]), reverse=True)
     return dets, mask
@@ -1735,7 +1868,8 @@ HELP = """
   STAGE TOGGLES (each shown along the bottom of the view):
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
-    z Omega      j OmScale    S OmSplit    N OmRot      f Kalman
+    z Omega      j OmScale    S OmSplit    N OmRot      F FarField
+    f Kalman
     R NonRigid
     G GndPlane   A Gait       V VGrad      B StaticSup
     G GndPlane   A Gait       V VGrad
@@ -1848,6 +1982,26 @@ def main():
                     help="degrees above ambient defining the WARM silhouette "
                          "the omega is fitted to (hair/scalp + clothed "
                          "shoulders). The hot face anchors it from inside.")
+    ap.add_argument("--far-delta", type=float, default=2.0,
+                    help="degrees above ambient for the far-field pass "
+                         "(toggle 'F', horizontal only)")
+    ap.add_argument("--far-min-area", type=int, default=5)
+    ap.add_argument("--far-max-area", type=int, default=90,
+                    help="area ceiling at the BOTTOM of the far band; the "
+                         "actual ceiling scales with row, from 35%% of this at "
+                         "the top of the frame to 165%% at the far-field line")
+    ap.add_argument("--far-contrast", type=float, default=2.5,
+                    help="minimum degrees the blob must stand above the ring "
+                         "around it — the discriminator at this size. Measured "
+                         "knee: on 332 real frames containing NO distant "
+                         "people, false positives run 292 at 2.0, 7 at 2.5, "
+                         "0 at 3.0. Room clutter tops out near 2 C of local "
+                         "contrast; a body should clear it comfortably.")
+    ap.add_argument("--far-row-max", type=float, default=0.55,
+                    help="far-field only considers blobs whose FEET sit above "
+                         "this fraction of frame height. Below it the scene is "
+                         "near field, where a small blob cannot be a distant "
+                         "person. Raise if the camera is pitched further down.")
     ap.add_argument("--h-strict", action="store_true",
                     help="restore the old close-range horizontal gates "
                          "(aspect>=1.1, extent>=0.25, 3 peaks above 150 px)")
@@ -2023,6 +2177,9 @@ def main():
             gnd_horizon=args.gnd_horizon, gnd_gain=args.gnd_gain,
             gnd_tol=args.gnd_tol, vgrad_max=args.vgrad_max,
             omega_max_tilt=args.omega_max_tilt,
+            far_delta=args.far_delta, far_min_area=args.far_min_area,
+            far_max_area=args.far_max_area, far_contrast=args.far_contrast,
+            far_row_max=args.far_row_max,
         )
 
         if not (flags["kalman"] and tracker is not None):
