@@ -67,6 +67,7 @@ TOGGLES = [
     ("x", "extend",   "BodyExt",   False),  # grow onto clothed torso/legs
     ("z", "omega",    "Omega",     True),   # head-shoulder detection
     ("j", "OmScale",  "OmScale",   True),   # drop omegas too small for frame
+    ("S", "osplit",   "OmSplit",   True),   # one box per omega inside a blob
     ("f", "kalman",   "Kalman",    False),  # temporal tracking
     ("R", "rigid",    "NonRigid",  False),  # reject rigid peak constellations
     ("G", "ground",   "GndPlane",  False),  # ground-plane scale consistency
@@ -1257,6 +1258,99 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
         except Exception:
             pass
 
+    # ---- OMEGA SPLIT (toggle 'S') ------------------------------------------
+    # Two people standing shoulder to shoulder merge into one connected blob,
+    # and no per-blob descriptor can undo that — the evidence that there are
+    # two of them is that there are two heads. Watershed already cuts on the
+    # distance transform, which fails when the bodies overlap enough that no
+    # valley forms between them; the omega detector works on the upper contour
+    # instead and still sees two domes.
+    #
+    # So: if a blob contains more than one omega, cut it. Each pixel goes to
+    # the nearest omega axis, which is the right rule for this geometry because
+    # people standing together separate side by side. Every piece is then
+    # re-measured on its own — area, peaks, temperature — so it has to earn its
+    # place through the later filters rather than inheriting the parent's.
+    if F["osplit"] and SF is not None and view in ("horizontal", "any"):
+        pieces = []
+        for d in dets:
+            oms = d.get("omegas") or []
+            if len(oms) < 2:
+                pieces.append(d)
+                continue
+            x, y, w, h = d["bbox"]
+            sub = np.zeros(mask.shape, bool)
+            sub[y:y + h, x:x + w] = binm[y:y + h, x:x + w]
+            ys_, xs_ = np.where(sub)
+            if xs_.size == 0:
+                pieces.append(d)
+                continue
+
+            axes = np.array(sorted({int(om["x"]) for om in oms}), np.float64)
+            if axes.size < 2:
+                pieces.append(d)
+                continue
+            owner = np.argmin(np.abs(xs_[:, None] - axes[None, :]), axis=1)
+
+            made = []
+            for k, ax in enumerate(axes):
+                sel = owner == k
+                if int(sel.sum()) < max(4, min_area // 2):
+                    continue
+                yy, xx = ys_[sel], xs_[sel]
+                bx0, by0 = int(xx.min()), int(yy.min())
+                bx1, by1 = int(xx.max()), int(yy.max())
+
+                mine = [om for om in oms if int(om["x"]) == int(ax)]
+                # the box must ENCLOSE its omega: the head box comes from the
+                # warm silhouette and can reach above/beside the hot pixels
+                for om in mine:
+                    hb = om.get("head_box")
+                    if hb:
+                        hx, hy, hw_, hh_ = hb
+                        bx0, by0 = min(bx0, hx), min(by0, hy)
+                        bx1, by1 = max(bx1, hx + hw_ - 1), max(by1, hy + hh_ - 1)
+                bx0, by0 = max(0, bx0), max(0, by0)
+                bx1 = min(mask.shape[1] - 1, bx1)
+                by1 = min(mask.shape[0] - 1, by1)
+
+                nd = dict(d)
+                nd["bbox"] = (bx0, by0, bx1 - bx0 + 1, by1 - by0 + 1)
+                nd["area_px"] = int(sel.sum())
+                # Re-measure the geometry. Copying the parent's aspect/extent/
+                # rect_fill would describe the merged pair, not this person.
+                pw, ph = bx1 - bx0 + 1, by1 - by0 + 1
+                nd["aspect"] = float(ph) / max(1.0, float(pw))
+                nd["extent"] = float(sel.sum()) / max(1.0, float(pw * ph))
+                pts = np.stack([xx, yy], axis=1).astype(np.int32)
+                try:
+                    (_, _), (rw, rh), _ = cv2.minAreaRect(pts)
+                    nd["rect_fill"] = float(sel.sum()) / max(1.0, rw * rh)
+                except Exception:
+                    nd["rect_fill"] = nd["extent"]
+                nd["centroid"] = (float(xx.mean()), float(yy.mean()))
+                nd["val_max"] = float(data[yy, xx].max())
+                npk2, sd2, rg2 = thermal_texture(data, yy, xx)
+                nd["peaks"] = int(npk2)
+                nd["std_c"] = float(sd2)
+                nd["range_c"] = float(rg2)
+                nd["peak_pts"] = peak_points(data, yy, xx)
+                nd["omegas"] = mine
+                nd["omega_count"] = len(mine)
+                nd["omega_score"] = float(mine[0]["score"]) if mine else 0.0
+                nd["omega_split"] = True
+                made.append(nd)
+
+            # A failed split must leave the original detection intact, never
+            # delete it. Below shoulder width the two domes merge, confidence
+            # collapses, and the pieces would be thrown out by MinPeaks — which
+            # would turn one correct detection into zero. Only accept a split
+            # where every piece carries a confident omega.
+            ok = (len(made) >= 2
+                  and all(m.get("omega_score", 0.0) >= 0.5 for m in made))
+            pieces.extend(made if ok else [d])
+        dets = pieces
+
     # Single-hot-object rejection.
     #
     # Measured on real captures vs synthetic objects:
@@ -1274,8 +1368,14 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
     if mp and mp > 1:
         # Skin-priority blobs are exempt: a face at 33-35 C is a person even
         # if it presents as a single warm centre.
+        # An omega-backed split piece is exempt. Splitting only happens because
+        # two head-and-shoulder domes were found with a hot face inside each;
+        # that is stronger evidence than the warm-centre count, and a person
+        # cut out of a merged pair legitimately carries fewer centres than the
+        # pair did.
         dets = [d for d in dets
-                if d.get("priority") or d["area_px"] < pca or d["peaks"] >= mp]
+                if d.get("priority") or d["area_px"] < pca or d["peaks"] >= mp
+                or (d.get("omega_split") and d.get("omega_score", 0.0) >= 0.5)]
 
     # ---- P-FILTER (all view modes, toggled with 'p') ------------------------
     # Reject anything with p_min or fewer warm centres. A body radiates from
@@ -1611,7 +1711,8 @@ HELP = """
   STAGE TOGGLES (each shown along the bottom of the view):
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
-    z Omega      j OmScale    f Kalman     R NonRigid   B StaticSup
+    z Omega      j OmScale    S OmSplit    f Kalman     R NonRigid
+    G GndPlane   A Gait       V VGrad      B StaticSup
     G GndPlane   A Gait       V VGrad
 
   C sample ground-plane calibration point (walk to several distances)
