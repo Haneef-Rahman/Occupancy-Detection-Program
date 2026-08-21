@@ -70,6 +70,7 @@ TOGGLES = [
     ("S", "osplit",   "OmSplit",   True),   # one box per omega inside a blob
     ("N", "orot",     "OmRot",     True),   # rotation-invariant omega search
     ("F", "farfield", "FarField",  True),   # distant small-blob pass (horiz)
+    ("D", "gradfar",  "GradFarF",  True),   # graded range model (horizontal)
     ("f", "kalman",   "Kalman",    False),  # temporal tracking
     ("R", "rigid",    "NonRigid",  False),  # reject rigid peak constellations
     ("G", "ground",   "GndPlane",  False),  # ground-plane scale consistency
@@ -938,6 +939,11 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                   omega_max_tilt=40.0,
                   far_delta=2.0, far_min_area=5, far_max_area=90,
                   far_contrast=2.5, far_row_max=0.55,
+                  gfar_ref_row=25.0, gfar_ref_h=7.0, gfar_ref_range=8.5,
+                  gfar_horizon=0.0, gfar_lo=0.55, gfar_hi=1.9,
+                  gfar_delta=2.5, gfar_max_range=12.0,
+                  gfar_contrast_near=3.5, gfar_contrast_far=2.5,
+                  gfar_structure_h=12.0,
                   vgrad_max=-0.15):
     """
     Band-threshold -> clean -> split touching bodies -> shape filter.
@@ -1576,6 +1582,138 @@ def detect_people(data, threshold, merge_gap=6, tmax=None, view="any",
                 far_field=True, far_contrast=contrast,
                 priority=False, extended=False))
 
+    # ---- GRADED FAR FIELD (horizontal only, toggle 'D') --------------------
+    # FarField uses a hard band: above a row, accept small blobs. That leaves
+    # mid range badly served — too far to survive the near-body gates, too big
+    # and too low in the frame for the far-field band. The gap is exactly where
+    # detection was failing.
+    #
+    # This pass replaces the band with a CONTINUOUS model. Under linear
+    # perspective a standing person's pixel height and the row of their feet
+    # are both inversely proportional to range, so
+    #
+    #     (y_feet - horizon)  =  k * h        with  k = (y_ref - horizon) / h_ref
+    #
+    # One measured person calibrates it. From the 8.5 m reference (h_ref px
+    # tall, feet at y_ref) every other range follows: a person at 4 m is
+    # 8.5/4 times taller with their feet proportionally further down.
+    #
+    # A blob is accepted when its height MATCHES what its row predicts. That is
+    # a much sharper test than "small and high up", because it rejects things
+    # that are the wrong size for where they are in both directions — a big
+    # blob high in the frame and a small blob low in it are equally impossible.
+    #
+    # The contrast requirement is graded too: apparent contrast falls with
+    # range as background mixes into each pixel, so demanding a fixed margin
+    # from a distant target would silently reimpose a range limit.
+    if F["gradfar"] and view == "horizontal" and tmin is not None:
+        IMH = float(data.shape[0])
+        k_ref = max(1e-3, (gfar_ref_row - gfar_horizon) / max(1.0, gfar_ref_h))
+
+        taken2 = np.zeros(mask.shape, np.uint8)
+        claimed = []
+        for d in dets:
+            bx_, by_, bw_, bh_ = d["bbox"]
+            pad = max(6, int(0.35 * max(bw_, bh_)))
+            taken2[max(0, by_ - pad):by_ + bh_ + pad,
+                   max(0, bx_ - pad):bx_ + bw_ + pad] = 1
+            claimed.append((bx_, by_, bw_, bh_, pad))
+
+        glo = amb_now + gfar_delta
+        ghi = tmax if tmax is not None else 60.0
+        gm = ((data >= glo) & (data <= ghi) & (taken2 == 0)).astype(np.uint8)
+        gm = cv2.morphologyEx(gm, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        nl2, lb2, st2, _ = cv2.connectedComponentsWithStats(gm, 8)
+
+        for li in range(1, nl2):
+            a = int(st2[li, cv2.CC_STAT_AREA])
+            if a < 4:
+                continue
+            bx = int(st2[li, cv2.CC_STAT_LEFT]); by = int(st2[li, cv2.CC_STAT_TOP])
+            bw = int(st2[li, cv2.CC_STAT_WIDTH]); bh = int(st2[li, cv2.CC_STAT_HEIGHT])
+
+            y_feet = float(by + bh)
+            if y_feet <= gfar_horizon + 1.0:
+                continue                       # at or above the horizon
+            h_exp = (y_feet - gfar_horizon) / k_ref
+            if h_exp < 2.0:
+                continue
+            ratio = bh / h_exp
+            if not (gfar_lo <= ratio <= gfar_hi):
+                continue                       # wrong size for its row
+
+            # implied range, for the caller and for grading the contrast test
+            rng_m = gfar_ref_range * (gfar_ref_h / max(1.0, float(bh)))
+            if rng_m > gfar_max_range:
+                continue
+
+            # width must be plausible for a body of that height
+            if bw > bh * 1.6 or bw < bh * 0.20:
+                continue
+
+            m_i = lb2 == li
+            ys_i, xs_i = np.where(m_i)
+            vals = data[ys_i, xs_i]
+
+            gx0, gy0 = max(0, bx - 4), max(0, by - 4)
+            gx1, gy1 = min(data.shape[1], bx + bw + 4), min(data.shape[0], by + bh + 4)
+            ring = np.ones((gy1 - gy0, gx1 - gx0), bool)
+            ring[by - gy0:by - gy0 + bh, bx - gx0:bx - gx0 + bw] = False
+            rv = data[gy0:gy1, gx0:gx1][ring]
+            if rv.size < 8:
+                continue
+            contrast = float(vals.mean() - np.median(rv))
+
+            # graded requirement: full margin near, relaxed at range
+            frac = min(1.0, rng_m / max(1e-3, gfar_max_range))
+            need = gfar_contrast_near + (gfar_contrast_far - gfar_contrast_near) * frac
+            if contrast < need:
+                continue
+
+            fcx, fcy = float(xs_i.mean()), float(ys_i.mean())
+            if any(bx_ - pad <= fcx <= bx_ + bw_ + pad and
+                   by_ - pad <= fcy <= by_ + bh_ + pad
+                   for bx_, by_, bw_, bh_, pad in claimed):
+                continue
+
+            # EQUIPMENT CONTEXT. Static suppression is off in this view by
+            # design — a person at range barely moves in image space — but that
+            # was also what kept powered equipment out. So the rigid-surround
+            # test has to be applied here explicitly, or every warm appliance
+            # at a plausible row becomes a person.
+            if SF is not None and F["equip"] and bh >= 6:
+                sub_i = np.zeros(mask.shape, np.uint8)
+                sub_i[ys_i, xs_i] = 255
+                try:
+                    ctx = SF.thermal_context(data, sub_i, amb_now, tmax=tmax)
+                    if SF.equipment_score(ctx) >= equip_thresh:
+                        continue
+                except Exception:
+                    pass
+
+            npk4, sd4, rg4 = thermal_texture(data, ys_i, xs_i)
+            dets.append(dict(
+                bbox=(bx, by, bw, bh), area_px=a,
+                centroid=(fcx, fcy),
+                val_max=float(vals.max()), val_mean=float(vals.mean()),
+                aspect=float(bh) / max(1.0, float(bw)),
+                extent=a / max(1.0, float(bw * bh)),
+                rect_fill=a / max(1.0, float(bw * bh)),
+                peaks=int(npk4), std_c=float(sd4), range_c=float(rg4),
+                peak_pts=peak_points(data, ys_i, xs_i),
+                omegas=[], omega_count=0, omega_score=0.0,
+                # The p-filter exemption is EARNED BY SIZE, not by being a
+                # far-field hit. A blob 20 px tall is a person at ~3 m and can
+                # show warm centres, so it must; only once a body is small
+                # enough that structure is unresolvable does the exemption
+                # apply. Without this the pass hands every mid-range warm
+                # object — a laptop at 3 m, say — a free pass around the one
+                # filter that actually rejects equipment.
+                far_field=bool(bh <= gfar_structure_h), grad_far=True,
+                far_contrast=contrast,
+                range_m=float(rng_m), h_expected=float(h_exp),
+                priority=False, extended=False))
+
     dets.sort(key=lambda d: (d.get("priority", False), d["area_px"]), reverse=True)
     return dets, mask
 
@@ -1869,6 +2007,7 @@ HELP = """
     t TempBand   w Watershed  g Merge      u ClustSml   y ShapeGate
     k MinPeaks   p P-Filter   e EquipRej   i SkinPrio   x BodyExt
     z Omega      j OmScale    S OmSplit    N OmRot      F FarField
+    D GradFarF
     f Kalman
     R NonRigid
     G GndPlane   A Gait       V VGrad      B StaticSup
@@ -2002,6 +2141,37 @@ def main():
                          "this fraction of frame height. Below it the scene is "
                          "near field, where a small blob cannot be a distant "
                          "person. Raise if the camera is pitched further down.")
+    ap.add_argument("--gfar-ref-row", type=float, default=25.0,
+                    help="CALIBRATION: image row of the reference person's FEET")
+    ap.add_argument("--gfar-ref-h", type=float, default=7.0,
+                    help="CALIBRATION: pixel height of the reference person")
+    ap.add_argument("--gfar-ref-range", type=float, default=8.5,
+                    help="CALIBRATION: true distance to the reference person (m)")
+    ap.add_argument("--gfar-horizon", type=float, default=0.0,
+                    help="image row of the horizon; 0 = top of frame")
+    ap.add_argument("--gfar-lo", type=float, default=0.55,
+                    help="accept blobs from this fraction of predicted height")
+    ap.add_argument("--gfar-hi", type=float, default=1.9,
+                    help="...up to this multiple. Wide because a seated or "
+                         "partly-occluded person is shorter than predicted.")
+    ap.add_argument("--gfar-delta", type=float, default=2.5,
+                    help="degrees above ambient for the graded pass")
+    ap.add_argument("--gfar-max-range", type=float, default=12.0)
+    ap.add_argument("--gfar-structure-h", type=float, default=12.0,
+                    help="blobs TALLER than this (px) must still pass the "
+                         "warm-centre filter; only smaller ones are exempt, "
+                         "because below this a body cannot resolve structure. "
+                         "12 px is about 5 m on the default calibration.")
+    ap.add_argument("--gfar-contrast-near", type=float, default=3.5,
+                    help="local contrast required at close range")
+    ap.add_argument("--gfar-contrast-far", type=float, default=2.5,
+                    help="...relaxed to this at max range, because apparent "
+                         "contrast falls as background mixes into each pixel")
+    ap.add_argument("--h-static", action="store_true",
+                    help="keep static suppression ON in horizontal view "
+                         "(off by default there: a seated or standing person "
+                         "at range barely moves in image space and gets "
+                         "absorbed into the background)")
     ap.add_argument("--h-strict", action="store_true",
                     help="restore the old close-range horizontal gates "
                          "(aspect>=1.1, extent>=0.25, 3 peaks above 150 px)")
@@ -2151,7 +2321,12 @@ def main():
             eff_sens = SHAPE_RULES.get(view_mode, {}).get("delta", DEFAULT_DELTA_C)
         thr, bg = compute_threshold(data, is_temp, eff_sens)
         suppressor.update(data)
-        suppressor.enabled = flags["static"]
+        # Horizontal sees people at range, where a whole body spans a handful
+        # of pixels and a seated or standing person moves almost nothing in
+        # image space. Static suppression absorbs them into the background,
+        # which is precisely the mid- and far-field case this view exists for.
+        suppressor.enabled = flags["static"] and (view_mode != "horizontal"
+                                                  or args.h_static)
         moving = suppressor.moving_mask(data) if is_temp else None
         dets, mask = detect_people(
             data, thr,
@@ -2180,6 +2355,13 @@ def main():
             far_delta=args.far_delta, far_min_area=args.far_min_area,
             far_max_area=args.far_max_area, far_contrast=args.far_contrast,
             far_row_max=args.far_row_max,
+            gfar_ref_row=args.gfar_ref_row, gfar_ref_h=args.gfar_ref_h,
+            gfar_ref_range=args.gfar_ref_range, gfar_horizon=args.gfar_horizon,
+            gfar_lo=args.gfar_lo, gfar_hi=args.gfar_hi,
+            gfar_delta=args.gfar_delta, gfar_max_range=args.gfar_max_range,
+            gfar_contrast_near=args.gfar_contrast_near,
+            gfar_contrast_far=args.gfar_contrast_far,
+            gfar_structure_h=args.gfar_structure_h,
         )
 
         if not (flags["kalman"] and tracker is not None):
