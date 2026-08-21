@@ -74,8 +74,13 @@ def main():
               "         not tell you whether the model generalises.\n")
     vi = args.val_session if args.val_session is not None else len(caps) - 1
 
+    # MUST be "images", not "png": Ultralytics finds a label file by string-
+    # replacing os.sep + "images" + os.sep with os.sep + "labels" + os.sep in
+    # the image path. Any other folder name and the swap silently does nothing,
+    # every image is counted as a background, and training dies with
+    # "No labels found".
     for split in ("train", "val"):
-        for sub in ("png", "labels"):
+        for sub in ("images", "labels"):
             os.makedirs(os.path.join(args.out, split, sub), exist_ok=True)
 
     counts = {"train": 0, "val": 0}
@@ -97,7 +102,7 @@ def main():
             arr = np.load(npy)
             img = render(arr, args.lo, args.hi)
             name = f"{tag}_{stem}"
-            cv2.imwrite(os.path.join(args.out, split, "png", name + ".png"), img)
+            cv2.imwrite(os.path.join(args.out, split, "images", name + ".png"), img)
             shutil.copy(lab, os.path.join(args.out, split, "labels", name + ".txt"))
             with open(lab) as fh:
                 lines = [l for l in fh.read().split("\n") if l.strip()]
@@ -116,7 +121,7 @@ def main():
     yaml = os.path.join(args.out, "fluxnet.yaml")
     with open(yaml, "w") as fh:
         fh.write(f"path: {os.path.abspath(args.out)}\n"
-                 f"train: train/png\nval: val/png\n\n"
+                 f"train: train/images\nval: val/images\n\n"
                  f"names:\n  0: person\n  1: head_shoulder\n")
 
     print(f"\ntrain {counts['train']} frames / {boxes['train']} boxes")
