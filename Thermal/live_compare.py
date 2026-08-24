@@ -54,15 +54,22 @@ def render_for_cnn(data):
 
 
 def open_camera(args):
+    """
+    Both camera classes return (data, flag) from read() — data FIRST.
+
+    The two disagree on what `flag` means: LeptonUVC returns ok, ThermalCamera
+    returns is_temp. They coincide in practice (a successful libuvc read is
+    always radiometric), and thermal_detect treats the second value as is_temp
+    for both, so this does the same. `data is None` is the real failure test.
+    """
     if not args.opencv:
         try:
             from lepton_libuvc import LeptonUVC
             print("  libuvc: radiometric Y16")
-            return LeptonUVC(), True
+            return LeptonUVC()
         except Exception as e:
             print(f"  libuvc unavailable: {e}\n  falling back to OpenCV ...")
-    cam = TD.ThermalCamera(args.device if args.device is not None else 0)
-    return cam, getattr(cam, "is_temp", False)
+    return TD.ThermalCamera(args.device if args.device is not None else 0)
 
 
 def main():
@@ -87,7 +94,10 @@ def main():
     print(f"loading {args.weights} ...")
     model = YOLO(args.weights)
 
-    cam, is_temp = open_camera(args)
+    cam = open_camera(args)
+    data, is_temp = cam.read()
+    if data is None:
+        sys.exit("no frame from the camera")
     if not is_temp:
         print("\n  WARNING: not radiometric. The CNN was trained on a FIXED\n"
               "  temperature span; an AGC image is a different encoding and the\n"
@@ -121,8 +131,8 @@ def main():
 
     while True:
         if not paused:
-            ok, data = cam.read()
-            if not ok:
+            data, is_temp = cam.read()
+            if data is None:
                 continue
             frame_i += 1
             dt = time.time() - t0
