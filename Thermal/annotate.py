@@ -122,9 +122,23 @@ def main():
     for r in rows:
         by_cluster.setdefault(int(r["cluster"]), []).append(r)
 
+    # RESUME. A cluster whose representative already has a human label was
+    # finished in an earlier run, even if the crash lost the status. Trusting
+    # the label files rather than the index means a crash costs at most the one
+    # cluster that was open at the time.
+    done_on_disk = set()
+    for r in rows:
+        if os.path.exists(os.path.join(human_dir, r["file"] + ".txt")):
+            done_on_disk.add(int(r["cluster"]))
+            if r["status"] == "todo":
+                r["status"] = "human"
+
     todo = sorted({int(r["cluster"]) for r in rows if r["status"] == "todo"})
+    if done_on_disk:
+        print(f"resuming: {len(done_on_disk)} clusters already have human "
+              f"labels, {len(todo)} left")
     if not todo:
-        print("nothing marked todo — already done?")
+        print("nothing left to annotate — all clusters have human labels")
         return
 
     S = max(2, args.scale)
@@ -151,6 +165,25 @@ def main():
                     break
 
     cv2.setMouseCallback(WIN, on_mouse)
+
+    def flush_triage():
+        """
+        Write progress after every cluster, not just at quit.
+
+        The old version only saved triage.csv on exit, so a crash 100 clusters
+        in lost every status even though the label files themselves had been
+        written. Rewriting 4000 rows costs about a millisecond; losing an hour
+        of annotation does not. Written to a temp file and renamed, so a crash
+        mid-write cannot leave a half-written index either.
+        """
+        tmp = tri + ".tmp"
+        with open(tmp, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["file", "cluster", "n_person", "n_omega", "status"])
+            for r in rows:
+                w.writerow([r["file"], r["cluster"], r["n_person"],
+                            r["n_omega"], r["status"]])
+        os.replace(tmp, tri)
 
     ci = 0
     edited = 0
@@ -244,6 +277,7 @@ def main():
                 m["status"] = "human"
             edited += 1
             propagated += len(targets) - 1
+            flush_triage()
 
         if k in (ord("1"), ord("2")) and st.pending:
             c = 0 if k == ord("1") else 1
@@ -276,12 +310,14 @@ def main():
                     with open(hp, "w") as fh:
                         fh.write(open(mp).read())
                 m["status"] = "human"
+            flush_triage()
             ci = min(ci + 1, len(todo) - 1)
             rep, members, arr = load_cluster(ci)
         elif k == ord("d"):
             for m in members:
                 m["status"] = "drop"
             deleted.extend(m["file"] for m in members)
+            flush_triage()
             ci = min(ci + 1, len(todo) - 1)
             rep, members, arr = load_cluster(ci)
         elif k in (13, 10, ord("n")):
@@ -320,4 +356,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # A crash mid-session used to vanish with the window. Write the traceback
+    # somewhere it survives, so the next run can say what happened.
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\ninterrupted — progress saved after the last committed cluster")
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        try:
+            d = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "."
+            with open(os.path.join(d, "annotate_crash.log"), "a") as fh:
+                fh.write(f"\n===== {__import__('datetime').datetime.now()} =====\n")
+                fh.write(tb)
+            print(f"traceback appended to {d}/annotate_crash.log")
+        except Exception:
+            pass
+        raise
