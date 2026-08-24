@@ -2468,7 +2468,7 @@ def main():
 
             # YOLO labels: "<class> <cx> <cy> <w> <h>", all normalised 0-1.
             #   class 0 = person        (full body blob)
-            #   class 1 = head_shoulder (the omega region, if one was found)
+            #   class 1 = omega        (the head-and-shoulder region)
             # Two classes rather than one because the omega box is a genuinely
             # different target from the body box, and which one a model should
             # learn is an open question worth keeping both options for.
@@ -2610,7 +2610,7 @@ def main():
                     os.makedirs(os.path.join(capture_dir, sub), exist_ok=True)
                 os.makedirs(os.path.join(capture_dir, "review"), exist_ok=True)
                 with open(os.path.join(capture_dir, "classes.txt"), "w") as fh:
-                    fh.write("person\nhead_shoulder\n")
+                    fh.write("person\nomega\n")
                 capture_manifest = open(os.path.join(capture_dir, "manifest.csv"),
                                         "w", newline="")
                 capture_writer = csv.writer(capture_manifest)

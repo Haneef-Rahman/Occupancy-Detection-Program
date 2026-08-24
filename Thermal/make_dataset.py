@@ -122,11 +122,11 @@ def main():
     with open(yaml, "w") as fh:
         fh.write(f"path: {os.path.abspath(args.out)}\n"
                  f"train: train/images\nval: val/images\n\n"
-                 f"names:\n  0: person\n  1: head_shoulder\n")
+                 f"names:\n  0: person\n  1: omega\n")
 
     print(f"\ntrain {counts['train']} frames / {boxes['train']} boxes")
     print(f"val   {counts['val']} frames / {boxes['val']} boxes")
-    print(f"classes: person {per_class[0]}, head_shoulder {per_class[1]}")
+    print(f"classes: person {per_class[0]}, omega {per_class[1]}")
     print(f"empty frames (no object): {empty} "
           f"({100.0 * empty / max(1, sum(counts.values())):.0f}%)")
     print(f"span: {args.lo}-{args.hi} C, fixed across the whole dataset")
