@@ -42,14 +42,27 @@ def render(arr, lo, hi):
     return cv2.merge([g, g, g])
 
 
-def collect(capture_dir):
+def collect(capture_dir, source="both"):
+    """
+    Resolve each frame's label, and say where it came from.
+
+    QUARANTINE. labels_human/ is yours, labels/ is the machine's; they are never
+    merged in a single file. A frame with a human label uses it and is tagged
+    gold, otherwise the machine label is used and tagged silver.
+
+    source="human"  only gold frames — a small, clean set
+    source="both"   gold where it exists, silver elsewhere
+    """
     npys = sorted(glob.glob(os.path.join(capture_dir, "npy", "*.npy")))
     out = []
     for n in npys:
         stem = os.path.splitext(os.path.basename(n))[0]
-        lab = os.path.join(capture_dir, "labels", stem + ".txt")
-        if os.path.exists(lab):
-            out.append((n, lab, stem))
+        hum = os.path.join(capture_dir, "labels_human", stem + ".txt")
+        mac = os.path.join(capture_dir, "labels", stem + ".txt")
+        if os.path.exists(hum):
+            out.append((n, hum, stem, "gold"))
+        elif source == "both" and os.path.exists(mac):
+            out.append((n, mac, stem, "silver"))
     return out
 
 
@@ -62,6 +75,11 @@ def main():
                          "validation. Omit and the LAST capture is used.")
     ap.add_argument("--lo", type=float, default=SPAN_C[0])
     ap.add_argument("--hi", type=float, default=SPAN_C[1])
+    ap.add_argument("--train-source", choices=("human", "both"), default="both",
+                    help="'both' trains on machine labels too (weak supervision "
+                         "— noisy, but the model averages over it). 'human' "
+                         "trains only on verified frames. VALIDATION IS ALWAYS "
+                         "HUMAN-ONLY and this flag cannot change that.")
     ap.add_argument("--every", type=int, default=1,
                     help="keep every Nth frame. Consecutive frames are near "
                          "duplicates; 2 or 3 costs little and halves the disk.")
@@ -88,15 +106,20 @@ def main():
     per_class = {0: 0, 1: 0}
     empty = 0
 
+    prov = {"train": {"gold": 0, "silver": 0}, "val": {"gold": 0, "silver": 0}}
+
     for ci, cap in enumerate(caps):
         split = "val" if ci == vi else "train"
-        items = collect(cap)
+        # Validation is human-only, always. Noisy labels in TRAINING are weak
+        # supervision the model averages over; noisy labels in VALIDATION
+        # corrupt the reported number with no way to detect it afterwards.
+        items = collect(cap, "human" if split == "val" else args.train_source)
         if not items:
             print(f"  {os.path.basename(cap)}: no npy/label pairs, skipped")
             continue
         tag = os.path.basename(cap)
         kept = 0
-        for i, (npy, lab, stem) in enumerate(items):
+        for i, (npy, lab, stem, src) in enumerate(items):
             if i % max(1, args.every):
                 continue
             arr = np.load(npy)
@@ -115,6 +138,7 @@ def main():
                 except (ValueError, IndexError, KeyError):
                     pass
             counts[split] += 1
+            prov[split][src] += 1
             kept += 1
         print(f"  {tag:<34} -> {split:<5} {kept} frames")
 
@@ -129,10 +153,17 @@ def main():
     print(f"classes: person {per_class[0]}, omega {per_class[1]}")
     print(f"empty frames (no object): {empty} "
           f"({100.0 * empty / max(1, sum(counts.values())):.0f}%)")
+    print(f"provenance: train gold {prov['train']['gold']} / "
+          f"silver {prov['train']['silver']}   |   "
+          f"val gold {prov['val']['gold']} (human-only by construction)")
     print(f"span: {args.lo}-{args.hi} C, fixed across the whole dataset")
     print(f"\nwrote {yaml}")
     if counts["val"] == 0:
-        print("\nNO VALIDATION FRAMES — check --val-session")
+        print("\nNO VALIDATION FRAMES.\n"
+              "  Validation is built from labels_human/ only, so the held-out\n"
+              "  session needs annotating first:\n"
+              f"    python3 triage.py {caps[vi]}\n"
+              f"    python3 annotate.py {caps[vi]}")
         sys.exit(1)
     print("\nyolo detect train model=yolo26n.pt "
           f"data={yaml} imgsz=640 epochs=150 batch=32 device=0")

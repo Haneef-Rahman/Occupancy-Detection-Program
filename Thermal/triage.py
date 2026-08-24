@@ -42,8 +42,8 @@ keeps that at 1% for a third of the leverage, which is the right trade when the
 failure is invisible. This script measures the drift for YOUR capture and prints
 it, so the choice is never blind.
 
-    python3 triage.py logs/capture_X
-    python3 triage.py logs/capture_X --max-boxes 1 --sim 0.25
+    python3 triage.py logs/capture_X                  # asks for the cut-off
+    python3 triage.py logs/capture_X --max-boxes 1    # unattended
 
 Writes triage.csv in the capture folder. Moves and deletes nothing.
 """
@@ -53,6 +53,8 @@ import csv
 import glob
 import os
 import sys
+
+import collections
 
 import cv2
 import numpy as np
@@ -82,9 +84,10 @@ def signature(arr, w=20, h=15):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("capture_dir")
-    ap.add_argument("--max-boxes", type=int, default=1,
-                    help="frames with this many PERSON boxes or fewer are sent "
-                         "for correction (default 1)")
+    ap.add_argument("--max-boxes", type=int, default=None,
+                    help="frames with this many PERSON boxes or fewer go for "
+                         "manual annotation. Omit and you are asked "
+                         "interactively, after seeing what each choice costs.")
     ap.add_argument("--sim", type=float, default=0.10,
                     help="mean abs temperature difference (C) below which two "
                          "frames count as the same scene. Lower = more, "
@@ -124,8 +127,60 @@ def main():
         size += 1
     n_clusters = cid + 1
 
-    # ---- decide what needs a human ---------------------------------------
-    need = [counts[i][0] <= args.max_boxes for i in range(len(stems))]
+    # ---- choose the cut-off ----------------------------------------------
+    # "Poorly annotated" has no principled definition yet, so rather than bake
+    # in a guess, show what each threshold actually costs and let the operator
+    # decide with the numbers in front of them.
+    hist = collections.Counter(counts[i][0] for i in range(len(stems)))
+    work_for = {}
+    for cut in range(0, max(hist) + 1):
+        nd = sum(v for k, v in hist.items() if k <= cut)
+        wc = len({int(cluster[i]) for i in range(len(stems))
+                  if counts[i][0] <= cut})
+        work_for[cut] = (nd, wc)
+
+    print(f"\nPERSON BOXES PER FRAME (as the classical detector left them)")
+    for k in sorted(hist):
+        bar = "#" * int(60.0 * hist[k] / max(hist.values()))
+        print(f"  {k:2d} boxes  {hist[k]:5d}  {bar}")
+
+    print(f"\nWHAT EACH CUT-OFF COSTS")
+    print(f"  {'cut':>4} {'frames flagged':>15} {'clusters to open':>18} "
+          f"{'leverage':>10}")
+    for cut in sorted(work_for):
+        nd, wc = work_for[cut]
+        if nd == 0:
+            continue
+        print(f"  <={cut:<2} {nd:15d} {wc:18d} "
+              f"{nd / max(1, wc):9.1f}x")
+
+    cut = args.max_boxes
+    if cut is None:
+        while True:
+            try:
+                raw = input("\ncut-off — frames with N or fewer person boxes "
+                            "go for annotation [1]: ").strip()
+            except EOFError:
+                raw = ""
+            if raw == "":
+                cut = 1
+                break
+            try:
+                cut = int(raw)
+            except ValueError:
+                print("  enter a whole number")
+                continue
+            if cut < 0:
+                print("  must be 0 or more")
+                continue
+            nd, wc = work_for.get(cut, (0, 0))
+            ans = input(f"  that flags {nd} frames across {wc} clusters "
+                        f"({nd / max(1, wc):.1f}x). ok? [Y/n] ").strip().lower()
+            if ans in ("", "y", "yes"):
+                break
+    print(f"\nusing cut-off <= {cut}")
+
+    need = [counts[i][0] <= cut for i in range(len(stems))]
 
     # a cluster is worth opening if ANY frame in it needs work; the rest of the
     # cluster then comes along for free via propagation
@@ -146,7 +201,7 @@ def main():
     print(f"  already annotated   {len(stems) - n_need}  "
           f"({100.0 * (len(stems) - n_need) / len(stems):.0f}%)  -> normal review")
     print(f"  need correction     {n_need}  "
-          f"({100.0 * n_need / len(stems):.0f}%)  <= {args.max_boxes} person box")
+          f"({100.0 * n_need / len(stems):.0f}%)  <= {cut} person box")
     print(f"\nclusters              {n_clusters}   "
           f"(median {int(np.median(sizes))} frames, largest {int(sizes.max())})")
     print(f"  containing work     {len(work_clusters)}")
@@ -159,7 +214,6 @@ def main():
     # A box drawn on one frame is copied to the whole cluster, so the number
     # that matters is how far a person moves WITHIN a cluster. Nobody re-checks
     # a propagated frame, so this failure would be silent.
-    import collections
     byc = collections.defaultdict(list)
     for i in range(len(stems)):
         byc[int(cluster[i])].append(i)

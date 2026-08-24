@@ -7,6 +7,14 @@ work. Whatever you draw is written to that frame's label file and propagated to
 every other frame in the cluster, because triage only groups frames that are
 near-identical in time.
 
+QUARANTINE. Your work goes to labels_human/, never to labels/. The machine's
+labels stay exactly as written, so the two annotators can never silently blend,
+and any frame's provenance is readable from which folder holds its label. The
+rule that matters downstream: validation is built from labels_human/ ONLY.
+Noisy labels in TRAINING are weak supervision and the model averages over them;
+noisy labels in VALIDATION corrupt the number you report and there is no way to
+detect it after the fact. Different risks, only one of them fatal.
+
     python3 annotate.py logs/capture_X
     python3 annotate.py logs/capture_X --scale 5 --no-propagate
 
@@ -106,6 +114,9 @@ def main():
     if not os.path.exists(tri):
         sys.exit(f"no triage.csv in {root} — run triage.py first")
 
+    human_dir = os.path.join(root, "labels_human")
+    os.makedirs(human_dir, exist_ok=True)
+
     rows = list(csv.DictReader(open(tri)))
     by_cluster = {}
     for r in rows:
@@ -153,7 +164,10 @@ def main():
         members = by_cluster[todo[k]]
         rep = min(members, key=lambda r: int(r["n_person"]))
         arr = np.load(os.path.join(root, "npy", rep["file"] + ".npy"))
-        st.boxes = load_labels(os.path.join(root, "labels", rep["file"] + ".txt"),
+        # prefer your own earlier work, fall back to the machine's as a start
+        hp = os.path.join(root, "labels_human", rep["file"] + ".txt")
+        mp = os.path.join(root, "labels", rep["file"] + ".txt")
+        st.boxes = load_labels(hp if os.path.exists(hp) else mp,
                                arr.shape[1], arr.shape[0])
         st.pending = None
         st.first = None
@@ -225,9 +239,9 @@ def main():
             nonlocal edited, propagated
             targets = [rep] if args.no_propagate else members
             for m in targets:
-                p = os.path.join(root, "labels", m["file"] + ".txt")
+                p = os.path.join(root, "labels_human", m["file"] + ".txt")
                 save_labels(p, st.boxes, W, H)
-                m["status"] = "done"
+                m["status"] = "human"
             edited += 1
             propagated += len(targets) - 1
 
@@ -253,8 +267,15 @@ def main():
             ci = min(ci + 1, len(todo) - 1)
             rep, members, arr = load_cluster(ci)
         elif k == ord("k"):
+            # confirming the machine's boxes is a human judgement, so they get
+            # promoted into labels_human/ rather than merely left alone
             for m in members:
-                m["status"] = "kept"
+                mp = os.path.join(root, "labels", m["file"] + ".txt")
+                hp = os.path.join(root, "labels_human", m["file"] + ".txt")
+                if os.path.exists(mp):
+                    with open(hp, "w") as fh:
+                        fh.write(open(mp).read())
+                m["status"] = "human"
             ci = min(ci + 1, len(todo) - 1)
             rep, members, arr = load_cluster(ci)
         elif k == ord("d"):
@@ -294,7 +315,8 @@ def main():
         with open(dl, "w") as fh:
             fh.write("\n".join(deleted) + "\n")
         print(f"  list written to {dl}")
-    print("\nlabels updated in place. Next: make_dataset.py")
+    print(f"\nhuman labels written to {os.path.join(root, 'labels_human')}")
+    print("machine labels in labels/ untouched. Next: make_dataset.py")
 
 
 if __name__ == "__main__":
