@@ -107,6 +107,11 @@ def main():
     ap.add_argument("--scale", type=int, default=5)
     ap.add_argument("--no-propagate", action="store_true",
                     help="write only the frame you edited")
+    ap.add_argument("--all", action="store_true",
+                    help="reopen every work cluster, including ones that "
+                         "already have human labels. Existing boxes load as a "
+                         "starting point; nothing is discarded until you "
+                         "commit over it.")
     args = ap.parse_args()
 
     root = args.capture_dir.rstrip("/")
@@ -133,8 +138,16 @@ def main():
             if r["status"] == "todo":
                 r["status"] = "human"
 
-    todo = sorted({int(r["cluster"]) for r in rows if r["status"] == "todo"})
-    if done_on_disk:
+    if args.all:
+        # Re-open everything the triage flagged, done or not. Used when you
+        # want another pass rather than a resume.
+        todo = sorted({int(r["cluster"]) for r in rows
+                       if r["status"] in ("todo", "human")})
+        print(f"--all: reopening {len(todo)} clusters "
+              f"({len(done_on_disk)} already have human labels)")
+    else:
+        todo = sorted({int(r["cluster"]) for r in rows if r["status"] == "todo"})
+    if done_on_disk and not args.all:
         print(f"resuming: {len(done_on_disk)} clusters already have human "
               f"labels, {len(todo)} left")
     if not todo:
