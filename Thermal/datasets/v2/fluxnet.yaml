@@ -1,0 +1,7 @@
+path: /Users/haneefrahman2650/Documents/GitHub/Occupancy-Detection-Program/Thermal/datasets/v2
+train: train/images
+val: val/images
+
+names:
+  0: person
+  1: omega
