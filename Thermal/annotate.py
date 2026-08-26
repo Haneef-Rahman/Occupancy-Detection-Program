@@ -7,6 +7,13 @@ work. Whatever you draw is written to that frame's label file and propagated to
 every other frame in the cluster, because triage only groups frames that are
 near-identical in time.
 
+PROPAGATION IS NOT FREE. A cluster is near-identical, not identical, and the
+box you draw is copied verbatim to every frame in it. Measured over 3726
+labelled frames: the frame you drew scores median IoU 0.396 against the warm
+body, propagated frames 0.361, and 45 boxes end up on empty space — none of
+them on a frame anyone drew, 60% past frame 15 of a long cluster. Pass
+--compensate to shift each propagated box by however far its own subject moved.
+
 QUARANTINE. Your work goes to labels_human/, never to labels/. The machine's
 labels stay exactly as written, so the two annotators can never silently blend,
 and any frame's provenance is readable from which folder holds its label. The
@@ -17,6 +24,7 @@ detect it after the fact. Different risks, only one of them fatal.
 
     python3 annotate.py logs/capture_X
     python3 annotate.py logs/capture_X --scale 5 --no-propagate
+    python3 annotate.py logs/capture_X --compensate
 
 Mouse
     click, click     two opposite corners of a box
@@ -101,12 +109,114 @@ def colorize(a):
     return cv2.applyColorMap((n * 255).astype(np.uint8), cv2.COLORMAP_INFERNO)
 
 
+# ---------------------------------------------------------------------------
+# MOTION COMPENSATION
+#
+# Propagation copies one box to every frame in its cluster. The cluster is
+# built to be near-identical, but "near" is not "identical" — people keep
+# moving, just slowly enough that the frame signature barely changes. Measured
+# across 3726 propagated labels on capture_20260824_152959:
+#
+#     frame you drew        median IoU 0.396
+#     propagated frames     median IoU 0.361
+#     boxes landing on empty space:  45, of which NONE were on a frame the
+#     annotator drew, and 60% were past frame 15 of a long cluster.
+#
+# So the average cost is small and the tail is what hurts. This shifts each box
+# by however far its own warm body moved, which fixes translation — the bulk of
+# motion at 8.7 fps — and does nothing for pose change, which is fine because
+# pose change does not walk a box off its subject.
+#
+# Per-box, not per-frame: two people in one cluster move independently, and a
+# single global shift would drag one box off to follow the other.
+# ---------------------------------------------------------------------------
+
+def warm_mask(arr, delta=2.0, tmax=36.0):
+    amb = float(np.median(arr))
+    m = ((arr >= amb + delta) & (arr <= tmax)).astype(np.uint8)
+    return cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+
+def compensate(box, ref_arr, tgt_arr, H, W, max_shift, min_corr=0.55):
+    """
+    Return box translated to follow its own subject, or None if untrustworthy.
+
+    METHOD: normalised cross-correlation of the box's THERMAL PATCH against the
+    target frame, searched within +/- max_shift. The patch is the whole
+    appearance — body, clothing, the cool-head/hot-face structure — so it locks
+    onto the person rather than onto warm pixels in general.
+
+    An earlier version tracked the centroid of warm mass instead. It measured
+    WORSE than not compensating at all (p25 IoU 0.231 -> 0.183 over 16516 real
+    propagated boxes), because the reference centroid was taken inside the box
+    while the target centroid was taken inside the box PLUS the search margin.
+    The larger target window swept in neighbouring warm pixels and dragged the
+    centroid outward — a systematic bias, not noise. Correlation is symmetric by
+    construction and has no such asymmetry.
+
+    Refusals, each a silent failure mode:
+      * patch smaller than 3x3            -> nothing to correlate
+      * peak correlation below `min_corr` -> subject changed or left; a weak
+        peak is a guess, and a guess is worse than the honest un-shifted box
+      * peak at the search-window edge    -> the true match is outside the
+        window, so the peak is a boundary artefact
+    """
+    c, x0, y0, x1, y1 = box
+    ax0, ay0 = max(0, int(min(x0, x1))), max(0, int(min(y0, y1)))
+    ax1, ay1 = min(W, int(max(x0, x1)) + 1), min(H, int(max(y0, y1)) + 1)
+    if ax1 - ax0 < 3 or ay1 - ay0 < 3:
+        return None
+    tmpl = ref_arr[ay0:ay1, ax0:ax1]
+
+    ms = int(round(max_shift))
+    sx0, sy0 = max(0, ax0 - ms), max(0, ay0 - ms)
+    sx1, sy1 = min(W, ax1 + ms), min(H, ay1 + ms)
+    search = tgt_arr[sy0:sy1, sx0:sx1]
+    if search.shape[0] < tmpl.shape[0] or search.shape[1] < tmpl.shape[1]:
+        return None
+
+    res = cv2.matchTemplate(search, tmpl, cv2.TM_CCOEFF_NORMED)
+    _, peak, _, loc = cv2.minMaxLoc(res)
+    if peak < min_corr:
+        return None
+    # a peak pinned to the edge of the search window means the real match lies
+    # outside it; accepting it would clamp the box to an arbitrary offset
+    if res.shape[1] > 1 and loc[0] in (0, res.shape[1] - 1) and \
+       res.shape[0] > 1 and loc[1] in (0, res.shape[0] - 1):
+        return None
+
+    dx = (sx0 + loc[0]) - ax0
+    dy = (sy0 + loc[1]) - ay0
+    d = (dx * dx + dy * dy) ** 0.5
+    if d > max_shift:
+        return None
+    if d < 0.5:
+        return None
+    nx0, ny0, nx1, ny1 = x0 + dx, y0 + dy, x1 + dx, y1 + dy
+    if min(nx0, nx1) < -2 or min(ny0, ny1) < -2 or \
+       max(nx0, nx1) > W + 2 or max(ny0, ny1) > H + 2:
+        return None
+    return (c, nx0, ny0, nx1, ny1), d
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("capture_dir")
     ap.add_argument("--scale", type=int, default=5)
     ap.add_argument("--no-propagate", action="store_true",
                     help="write only the frame you edited")
+    ap.add_argument("--compensate", action="store_true",
+                    help="shift each propagated box by however far its own warm "
+                         "body moved between the frame you drew and the target "
+                         "frame. Off by default so existing labels stay "
+                         "reproducible; a shift that cannot be trusted is "
+                         "refused and the un-shifted box kept.")
+    ap.add_argument("--max-shift", type=float, default=16.0,
+                    help="refuse a compensation longer than this many sensor "
+                         "pixels. Swept on 16516 real propagated boxes: 6 px "
+                         "and 8 px leave most of the gain on the table, 16 px "
+                         "is the optimum, 20 px starts pulling boxes onto the "
+                         "wrong person (harmed 3 -> 12).")
     ap.add_argument("--all", action="store_true",
                     help="reopen every work cluster, including ones that "
                          "already have human labels. Existing boxes load as a "
@@ -203,6 +313,8 @@ def main():
     propagated = 0
     deleted = []
     dirty = False
+    n_shift = n_refuse = 0
+    shifts = []
 
     def load_cluster(k):
         """Open the cluster's representative: the frame most needing work."""
@@ -282,11 +394,32 @@ def main():
         k = cv2.waitKey(20) & 0xFF
 
         def commit():
-            nonlocal edited, propagated
+            nonlocal edited, propagated, n_shift, n_refuse
             targets = [rep] if args.no_propagate else members
+            ref_arr = arr.astype(np.float32) if args.compensate and st.boxes else None
             for m in targets:
                 p = os.path.join(root, "labels_human", m["file"] + ".txt")
-                save_labels(p, st.boxes, W, H)
+                out = st.boxes
+                if ref_arr is not None and m["file"] != rep["file"]:
+                    tp = os.path.join(root, "npy", m["file"] + ".npy")
+                    try:
+                        tgt_arr = np.load(tp).astype(np.float32)
+                    except Exception:
+                        tgt_arr = None
+                    if tgt_arr is not None:
+                        out = []
+                        for b in st.boxes:
+                            r = compensate(b, ref_arr, tgt_arr, H, W,
+                                           args.max_shift)
+                            if r is None:
+                                out.append(b)
+                                n_refuse += 1
+                            else:
+                                nb, d = r
+                                out.append(nb)
+                                shifts.append(d)
+                                n_shift += 1
+                save_labels(p, out, W, H)
                 m["status"] = "human"
             edited += 1
             propagated += len(targets) - 1
@@ -359,6 +492,16 @@ def main():
     print(f"\nclusters edited      {edited}")
     print(f"frames propagated to {propagated}")
     print(f"marked for deletion  {len(deleted)}")
+    if args.compensate:
+        tot = n_shift + n_refuse
+        sh = np.array(shifts) if shifts else np.array([0.0])
+        print(f"\nmotion compensation")
+        print(f"  boxes shifted      {n_shift} "
+              f"({100.0 * n_shift / max(1, tot):.0f}%)")
+        print(f"  refused (kept)     {n_refuse} "
+              f"({100.0 * n_refuse / max(1, tot):.0f}%)")
+        print(f"  shift: median {np.median(sh):.1f} px   "
+              f"p90 {np.percentile(sh, 90):.1f} px   max {sh.max():.1f} px")
     if deleted:
         dl = os.path.join(root, "to_delete.txt")
         with open(dl, "w") as fh:
