@@ -44,6 +44,7 @@ TWO SEPARATE RULES, often confused:
 import argparse
 import glob
 import os
+import random
 import shutil
 import sys
 
@@ -97,6 +98,16 @@ def main():
                          "Several short recordings make a far better test set "
                          "than one: a 200-frame capture is only ~12 clusters, "
                          "so a single bad cluster swings the score by 8%%.")
+    ap.add_argument("--val-fraction", type=float, default=None,
+                    help="split WITHIN each capture instead of holding whole "
+                         "sessions out, e.g. 0.2 for a 80/20 split. Overrides "
+                         "--val-session/--val-sessions.")
+    ap.add_argument("--split-by", choices=("frame", "cluster"), default="frame",
+                    help="'frame' picks frames at random. 'cluster' keeps each "
+                         "triage cluster whole, so near-duplicate frames cannot "
+                         "straddle the split. See the note in the header.")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="RNG seed, so a split is reproducible")
     ap.add_argument("--lo", type=float, default=SPAN_C[0])
     ap.add_argument("--hi", type=float, default=SPAN_C[1])
     ap.add_argument("--train-source", choices=("human", "both"), default="both",
@@ -111,7 +122,7 @@ def main():
     args = ap.parse_args()
 
     caps = [c.rstrip("/") for c in args.captures]
-    if len(caps) < 2:
+    if len(caps) < 2 and args.val_fraction is None:
         print("WARNING: one capture only. Train and val will come from the same\n"
               "         session, so the val score will be optimistic and will\n"
               "         not tell you whether the model generalises.\n")
@@ -142,6 +153,48 @@ def main():
         for sub in ("images", "labels"):
             os.makedirs(os.path.join(args.out, split, sub), exist_ok=True)
 
+    rng = random.Random(args.seed)
+
+    def split_within(cap, items):
+        """
+        Cut one capture into train and val.
+
+        Validation stays human-only: the split is taken over the GOLD frames,
+        and machine-labelled frames can only ever join train. So
+        --train-source both still yields a clean val side.
+        """
+        gold = [it for it in items if it[3] == "gold"]
+        silver = [it for it in items if it[3] != "gold"]
+        if not gold:
+            return [], []
+        if args.split_by == "cluster":
+            byc = {}
+            tri = os.path.join(cap, "triage.csv")
+            if os.path.exists(tri):
+                import csv as _csv
+                for r in _csv.DictReader(open(tri)):
+                    byc[r["file"]] = int(r["cluster"])
+            groups = {}
+            for it in gold:
+                groups.setdefault(byc.get(it[2], it[2]), []).append(it)
+            keys = sorted(groups)
+            rng.shuffle(keys)
+            want = int(round(len(gold) * args.val_fraction))
+            vg, got = [], 0
+            for k in keys:
+                if got >= want:
+                    break
+                vg += groups[k]
+                got += len(groups[k])
+            vset = {id(x) for x in vg}
+            tg = [it for it in gold if id(it) not in vset]
+        else:
+            sh = list(gold)
+            rng.shuffle(sh)
+            n = int(round(len(sh) * args.val_fraction))
+            vg, tg = sh[:n], sh[n:]
+        return tg + silver, vg
+
     counts = {"train": 0, "val": 0}
     boxes = {"train": 0, "val": 0}
     per_class = {0: 0, 1: 0}
@@ -153,7 +206,48 @@ def main():
     # fewer sessions than you think. Collected here and shouted about at the end.
     missing = []
 
-    for ci, cap in enumerate(caps):
+    # ---- within-capture split ------------------------------------------
+    if args.val_fraction is not None:
+        if not 0.0 < args.val_fraction < 1.0:
+            sys.exit("--val-fraction must be strictly between 0 and 1")
+        for cap in caps:
+            items = collect(cap, args.train_source)
+            if not items:
+                print(f"  {os.path.basename(cap):<34} SKIPPED (no labels)")
+                missing.append((cap, "both", "no usable labels"))
+                continue
+            tr, va = split_within(cap, items)
+            tag = os.path.basename(cap)
+            for split, group in (("train", tr), ("val", va)):
+                kept = 0
+                for i, (npy, lab, stem, src) in enumerate(group):
+                    if i % max(1, args.every):
+                        continue
+                    arr = np.load(npy)
+                    cv2.imwrite(os.path.join(args.out, split, "images",
+                                             f"{tag}_{stem}.png"),
+                                render(arr, args.lo, args.hi))
+                    shutil.copy(lab, os.path.join(args.out, split, "labels",
+                                                  f"{tag}_{stem}.txt"))
+                    with open(lab) as fh:
+                        lines = [l for l in fh.read().split("\n") if l.strip()]
+                    if not lines:
+                        empty += 1
+                    boxes[split] += len(lines)
+                    for l in lines:
+                        try:
+                            per_class[int(l.split()[0])] += 1
+                        except (ValueError, IndexError, KeyError):
+                            pass
+                    counts[split] += 1
+                    prov[split][src] += 1
+                    kept += 1
+                print(f"  {tag:<34} -> {split:<5} {kept} frames")
+        caps_done = True
+    else:
+        caps_done = False
+
+    for ci, cap in enumerate([] if caps_done else caps):
         split = "val" if ci in val_idx else "train"
         # Validation is human-only ALWAYS. Noisy labels in TRAINING are weak
         # supervision the model averages over; noisy labels in VALIDATION
