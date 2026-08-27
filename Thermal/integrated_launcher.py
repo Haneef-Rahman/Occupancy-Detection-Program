@@ -348,7 +348,9 @@ class StickyTracker(MultiTracker):
     def __init__(self, *a, revive_scale=1.8, ghost_frames=40,
                  dup_confirm=3, reid_px=0.0, exit_margin=12.0,
                  occl_timeout=350, occl_clear=6, frame_wh=(160, 120),
-                 occl_enabled=True, use_ledger=True, ledger_decay=600, **kw):
+                 occl_enabled=True, use_ledger=True, ledger_decay=600,
+                 exit_edges=("left", "right", "top", "bottom"),
+                 exit_zones=(), **kw):
         super().__init__(*a, **kw)
         self.revive_scale = revive_scale
         self.n_new = 0
@@ -372,6 +374,10 @@ class StickyTracker(MultiTracker):
         # occlusion memory runs at full strength — the exact opposite of off.
         self.occl_enabled = occl_enabled
         self.exit_margin = exit_margin
+        self.exit_edges = set(exit_edges)
+        self.exit_zones = list(exit_zones)
+        self.n_crouch = 0
+        self.no_crouch_veto = False
         self.occl_timeout = occl_timeout
         self.occl_clear = occl_clear
         # Only applied where the scene has never hidden anyone. Much more
@@ -398,9 +404,116 @@ class StickyTracker(MultiTracker):
         self.frame = 0
 
     def at_edge(self, x, y):
+        """
+        Is this position outside the room, as the sensor defines the room?
+
+        The field of view IS the room here. Anything that crosses out of it has
+        stopped being observable, and an occupancy count over an unobservable
+        space is a guess. So a track ending at the boundary is an exit
+        regardless of how it got there.
+
+        --exit-edges exists for the unusual install where one border must not
+        count — a view that overruns into an adjoining space, say — but the
+        default is all four, because the ordinary case is that the frame is
+        the whole of what this sensor is responsible for.
+        """
         W, H = self.frame_wh
         m = self.exit_margin
-        return x <= m or y <= m or x >= W - m or y >= H - m
+        if "left" in self.exit_edges and x <= m:
+            return True
+        if "right" in self.exit_edges and x >= W - m:
+            return True
+        if "top" in self.exit_edges and y <= m:
+            return True
+        if "bottom" in self.exit_edges and y >= H - m:
+            return True
+        for zx0, zy0, zx1, zy1 in self.exit_zones:
+            if zx0 - m <= x <= zx1 + m and zy0 - m <= y <= zy1 + m:
+                return True
+        return False
+
+    @staticmethod
+    def loss_kind(t, n=8, grow_max=1.15, min_move=1.2):
+        """
+        WHICH WAY was this person going when we lost them?
+
+        Direction beats position. A rule based on where a track ends needs to
+        know which borders are doors and which are walls, and no amount of
+        thermal data reveals that. But how someone was MOVING when they
+        vanished is measured, not configured, and it separates the two cases
+        directly:
+
+            sideways   they walked out of the room. Whether that happened at
+                       the frame border or in the middle of it does not matter
+                       — lateral travel ending in nothing means gone.
+            downward   they crouched, sat, or dropped behind furniture. They
+                       are still here.
+
+        Downward is qualified by scale. Walking toward the camera also carries
+        the box down the frame, but a nearer head subtends more pixels, so it
+        GROWS. A head that sinks while holding its size ducked; one that sinks
+        while growing walked into the lens and out of frame.
+
+        Returns "exit", "hidden", or "unclear" — the last when the track simply
+        stopped without going anywhere, which is a detector dropout and gets
+        decided by position instead.
+        """
+        hist = t.history[-n:] if len(t.history) >= 3 else []
+        hh = getattr(t, "_hh", [])[-n:]
+        if len(hist) < 3:
+            return "unclear"
+        dx = hist[-1][0] - hist[0][0]
+        dy = hist[-1][1] - hist[0][1]
+        adx, ady = abs(dx), abs(dy)
+        if max(adx, ady) < min_move:
+            return "unclear"                 # stood still and blinked out
+        grow = 1.0
+        if len(hh) >= 3:
+            h0 = max(1e-6, sum(hh[:2]) / 2.0)
+            grow = (sum(hh[-2:]) / 2.0) / h0
+        if ady > adx and dy > 0:
+            # went down: hidden unless the growth says they came at the camera
+            return "exit" if grow >= grow_max else "hidden"
+        if adx >= ady:
+            return "exit"                    # travelled sideways and stopped
+        return "unclear"                     # went up — walked away into depth
+
+    @staticmethod
+    def crouch_signature(t, n=8, grow_max=1.15):
+        """
+        Did this track go DOWN, or did it walk TOWARDS the camera and out?
+
+        Both end with the box drifting down the frame, so vertical motion alone
+        cannot separate them — a first attempt used it and vetoed every genuine
+        exit through the bottom edge. Scale is what distinguishes them:
+
+            crouching     head sinks, apparent size barely changes
+                          (you are not getting closer, only lower)
+            approaching   head sinks AND grows, because range is shrinking
+                          and a nearer head subtends more pixels
+
+        So the test is downward motion WITHOUT growth. A head that drops while
+        staying the same size ducked behind something; one that drops while
+        growing walked toward the lens.
+
+        Note this reads the tracked OMEGA. A crouching person's head does not
+        get smaller — the body silhouette shortens, but the head is the same
+        head — so a shrink test on the tracked box would find nothing. It is
+        the absence of growth that carries the information.
+
+        (t.w_hist holds WIDTH, not height — using it here was the other half of
+        the original bug, so the height series is kept separately.)
+        """
+        hist = t.history[-n:] if len(t.history) >= 2 else []
+        hh = getattr(t, "_hh", [])[-n:]
+        if len(hist) < 3 or len(hh) < 3:
+            return False
+        dy = hist[-1][1] - hist[0][1]           # + is downward in image coords
+        h0 = max(1e-6, sum(hh[:2]) / 2.0)
+        h1 = sum(hh[-2:]) / 2.0
+        grow = h1 / h0
+        sank = dy > max(0.8, 0.10 * float(t.x[5]))
+        return sank and grow < grow_max
 
     def resolve_occluded(self, dets, cnn_ran):
         """
@@ -664,8 +777,34 @@ class StickyTracker(MultiTracker):
             cx, cy = t.centroid
             self.ghosts.append((t.id, cx, cy, w, h, self.frame, t.hits))
 
+            # BOUNDARY OUTRANKS DIRECTION.
+            #
+            # Leaving the frame is leaving the room, whatever the manner of
+            # going — sideways, downward, crouching through the doorway, any
+            # of it. The sensor's field of view IS the room as far as this
+            # system is concerned, and something that crosses out of it is no
+            # longer being counted. Reading direction there was over-thinking:
+            # it let a person crouch on their way out of frame and stay on the
+            # books forever.
+            #
+            # Direction is the right tool for the OTHER question — a track that
+            # died in open view, with the boundary nowhere near. There, going
+            # down means they ducked behind something and going sideways means
+            # the detector lost someone who was walking out.
+            if self.at_edge(cx, cy):
+                kind = "exit"
+            elif self.no_crouch_veto:
+                kind = "hidden"
+            else:
+                kind = self.loss_kind(t)
+                if kind == "unclear":
+                    # No direction to read and not at the boundary: a person
+                    # does not evaporate from open floor, so assume hidden.
+                    kind = "hidden"
+            if kind == "hidden" and t.hits >= self.min_hits:
+                self.n_crouch += 1
             if (self.occl_enabled and t.hits >= self.min_hits
-                    and not self.at_edge(cx, cy)):
+                    and kind == "hidden"):
                 # Interior death. Who was next to them when they vanished? If
                 # another track was within merging distance, that is positive
                 # evidence of occlusion rather than an unexplained dropout.
@@ -685,6 +824,13 @@ class StickyTracker(MultiTracker):
             elif t.hits >= self.min_hits:
                 self.n_exited += 1
                 died_edge += 1
+                self.events.append(dict(
+                    frame=self.frame, event="exit", id=t.id,
+                    x=f"{cx:.1f}", y=f"{cy:.1f}", cause=kind,
+                    near_track="", near_dist="", near_misses="",
+                    ghost_id="", ghost_dist="", ghost_age="",
+                    n_within_2gate="", n_dets=len(dets),
+                    n_tracks=len(self.tracks)))
             self.events.append(dict(frame=self.frame, event="death", id=t.id,
                                     x=f"{t.centroid[0]:.1f}",
                                     y=f"{t.centroid[1]:.1f}",
@@ -696,6 +842,19 @@ class StickyTracker(MultiTracker):
         self.tracks = [t for t in self.tracks if t.misses <= self.max_misses]
         self.ghosts = [g for g in self.ghosts
                        if self.frame - g[5] <= self.ghost_frames]
+        for t in self.tracks:
+            if not hasattr(t, "_hh"):
+                t._hh = []
+            # ONLY on frames that were actually measured. A coasting track
+            # predicts w and h forward unchanged, so recording every frame
+            # fills the window with identical values and every departure then
+            # looks like "sank without growing" — i.e. a crouch. The last 8
+            # real observations are what carry the scale information.
+            if t.misses == 0:
+                t._hh.append(float(t.x[5]))
+                if len(t._hh) > 24:
+                    t._hh.pop(0)
+
         self.pending = [q for q in self.pending if self.frame - q[3] <= 2]
         if self.use_ledger:
             self.ledger_update(born_edge, died_edge, 0)
@@ -948,6 +1107,21 @@ def main():
                          "position before an occluded person is dropped. This "
                          "is the positive test that stops a wrong memory from "
                          "inflating the count forever.")
+    ap.add_argument("--exit-edges", default="left,right,top,bottom",
+                    help="which frame borders are real openings. A camera "
+                         "looking across a room sees WALLS at left and right, "
+                         "so a track ending there did not leave the building. "
+                         "For a horizontal view with a door behind the camera, "
+                         "'bottom' alone is usually right. 'none' for a fully "
+                         "enclosed view.")
+    ap.add_argument("--exit-zone", action="append", default=[],
+                    metavar="x0,y0,x1,y1",
+                    help="a door INSIDE the frame, in sensor px (160x120). "
+                         "Repeatable. Use when the doorway is visible rather "
+                         "than at a border.")
+    ap.add_argument("--no-direction", action="store_true",
+                    help="ignore direction of travel and classify a lost track "
+                         "purely by whether it was near a declared exit")
     ap.add_argument("--no-ledger", action="store_true",
                     help="report only what is visible. The ledger counts the "
                          "room by boundary crossings instead, which is what "
@@ -1015,6 +1189,20 @@ def main():
     ap.add_argument("--opencv", action="store_true")
     ap.add_argument("--note", default="")
     args = ap.parse_args()
+    edges = set() if args.exit_edges.strip().lower() in ("none", "") else {
+        e.strip().lower() for e in args.exit_edges.split(",") if e.strip()}
+    bad = edges - {"left", "right", "top", "bottom"}
+    if bad:
+        sys.exit(f"--exit-edges: unknown {sorted(bad)}; "
+                 f"use left,right,top,bottom or none")
+    zones = []
+    for z in args.exit_zone:
+        try:
+            a, b, c, d = (float(v) for v in z.split(","))
+        except ValueError:
+            sys.exit(f"--exit-zone wants x0,y0,x1,y1 — got {z!r}")
+        zones.append((min(a, c), min(b, d), max(a, c), max(b, d)))
+
     if args.always_yolo:
         args.mode = "yolo"
     pure = args.mode == "yolo"
@@ -1057,6 +1245,7 @@ def main():
                        occl_enabled=not args.no_occlusion,
                        use_ledger=not args.no_ledger,
                        ledger_decay=args.ledger_decay,
+                       exit_edges=edges, exit_zones=zones,
                        occl_timeout=args.occl_timeout,
                        occl_clear=args.occl_clear,
                        frame_wh=(data.shape[1], data.shape[0]))
@@ -1066,6 +1255,7 @@ def main():
 
     paused = logging_on = False
     show_bar, show_blobs, show_trails = True, False, True
+    show_exits = True
     frame_i = saved = n_yolo = 0
     sel = 0                          # which TUNABLE [ and ] act on
     occ_hist = []                    # confirmed count history, for the sparkline
@@ -1078,6 +1268,8 @@ def main():
     blobs = []
     trail = {}
 
+    mt.no_crouch_veto = args.no_direction
+    print(f"exits: edges={sorted(edges) or 'none'}  zones={len(zones)}")
     print(f"\nlogging to {csv_path}")
     print("q quit  space pause  y force YOLO  b blobs  t trails  l log\n")
 
@@ -1181,6 +1373,22 @@ def main():
         vis = cv2.resize(TD.colorize(data),
                          (data.shape[1] * S, data.shape[0] * S),
                          interpolation=cv2.INTER_NEAREST)
+
+        # declared openings, drawn so the configuration is visible rather than
+        # something you have to remember you set
+        if show_exits:
+            Wf, Hf = data.shape[1], data.shape[0]
+            m = int(args.exit_margin * S)
+            for e in mt.exit_edges:
+                if e == "left":   cv2.rectangle(vis, (0, 0), (m, Hf * S), C_BAD, 1)
+                if e == "right":  cv2.rectangle(vis, (Wf * S - m, 0), (Wf * S, Hf * S), C_BAD, 1)
+                if e == "top":    cv2.rectangle(vis, (0, 0), (Wf * S, m), C_BAD, 1)
+                if e == "bottom": cv2.rectangle(vis, (0, Hf * S - m), (Wf * S, Hf * S), C_BAD, 1)
+            for zx0, zy0, zx1, zy1 in mt.exit_zones:
+                cv2.rectangle(vis, (int(zx0 * S), int(zy0 * S)),
+                              (int(zx1 * S), int(zy1 * S)), C_BAD, 1)
+                cv2.putText(vis, "EXIT", (int(zx0 * S) + 3, int(zy0 * S) + 14),
+                            F, 0.36, C_BAD, 1, cv2.LINE_AA)
 
         if show_blobs:
             for b in blobs:
@@ -1339,6 +1547,8 @@ def main():
                 if fits(y): row(bar, y, "occluded", f"{mt.n_recovered}/{mt.n_occluded}",
                                 vcol=C_WARN if mt.occluded else C_TEXT); y += 20
                 if fits(y): row(bar, y, "exited", mt.n_exited); y += 20
+                if fits(y): row(bar, y, "hidden (down)", mt.n_crouch,
+                                vcol=C_WARN if mt.n_crouch else C_TEXT); y += 20
                 if fits(y) and mt.use_ledger:
                     row(bar, y, "ledger in/out",
                         f"{mt.n_entries}/{mt.n_exits}"); y += 20
@@ -1390,6 +1600,8 @@ def main():
             show_bar = not show_bar
         elif k == ord("b"):
             show_blobs = not show_blobs
+        elif k == ord("e"):
+            show_exits = not show_exits
         elif k == ord("t"):
             show_trails = not show_trails
         elif k == ord("y"):
