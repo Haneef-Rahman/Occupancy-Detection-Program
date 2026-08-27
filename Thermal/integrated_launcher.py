@@ -75,7 +75,7 @@ import cv2
 import numpy as np
 
 import thermal_detect as TD
-from tracker import MultiTracker
+from tracker import MultiTracker, KalmanTrack
 
 
 SPAN_C = (15.0, 45.0)      # MUST match make_dataset.py — the model's encoding
@@ -139,6 +139,261 @@ def yolo_omegas(model, data, conf, imgsz):
             else:                           # person -> display + range only
                 bodies.append((box, float(v)))
     return dets, bodies
+
+
+def dedup(dets, iou_thresh=0.15, centre_frac=1.4):
+    """
+    Collapse multiple omega boxes that describe the same head.
+
+    Ultralytics runs NMS at IoU 0.7 by default, which is deliberately permissive
+    so that genuinely adjacent objects both survive. On a 160x120 thermal frame
+    an omega is 4-15 px across, and two boxes on the same head routinely overlap
+    at 0.4-0.6 — under the NMS threshold, so both come through. The val_batch
+    previews show this directly: labels reading "omeomega0.8" are two boxes
+    stacked on one person.
+
+    Downstream that is not a cosmetic problem. One box matches the existing
+    track, the other is unmatched, and an unmatched detection creates a NEW
+    track with a NEW id and a new colour. Next frame the duplicate lands
+    elsewhere and the ids swap. That is the colour churn.
+
+    Two boxes are merged if they overlap past `iou_thresh` OR if one's centre
+    sits within `centre_frac` of the other's half-size — the second test catches
+    a small box nested inside a larger one, where IoU stays low but they are
+    plainly the same head.
+
+    Thresholds swept on a simulated walk with 30% duplicate boxes. 0.35/0.6
+    (the obvious first guess) left 8 distinct ids over 300 frames; 0.15/1.4
+    leaves 4. Going further to 0.10 gives 3, but starts merging detections only
+    8 px apart — 0.49 m at 2 m range, which is two people standing shoulder to
+    shoulder, so that is where the tuning stops. At 0.15/1.4 the closest pair
+    that survives as two is 6 px, or 0.37 m: tighter than people stand.
+    """
+    order = sorted(range(len(dets)), key=lambda i: -dets[i].get("conf", 0.0))
+    keep = []
+    for i in order:
+        a = dets[i]
+        ax, ay, aw, ah = a["bbox"]
+        dup = False
+        for j in keep:
+            b = dets[j]
+            bx, by, bw, bh = b["bbox"]
+            ix0, iy0 = max(ax, bx), max(ay, by)
+            ix1, iy1 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+            inter = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+            union = aw * ah + bw * bh - inter
+            if union > 0 and inter / union >= iou_thresh:
+                dup = True
+                break
+            acx, acy = a["centroid"]
+            bcx, bcy = b["centroid"]
+            if (abs(acx - bcx) <= centre_frac * max(aw, bw) / 2 and
+                    abs(acy - bcy) <= centre_frac * max(ah, bh) / 2):
+                dup = True
+                break
+        if not dup:
+            keep.append(i)
+    return [dets[i] for i in sorted(keep)]
+
+
+class StickyTracker(MultiTracker):
+    """
+    MultiTracker plus a second association pass for coasting tracks.
+
+    The base class matches every detection against every track with one gate,
+    then spawns a new track for whatever is left. That is fine while detections
+    are continuous, and wrong the moment one drops: the track starts coasting
+    and drifts under constant velocity, so when the detection returns it can sit
+    outside the gate. A new track is created, the person changes id and colour,
+    and the old track lingers for max_misses frames as a ghost.
+
+    So: match live tracks first with the normal gate, then give still-unmatched
+    detections a second chance against COASTING tracks with a gate widened in
+    proportion to how long they have coasted — a track that has predicted
+    forward for 5 frames has 5 frames of accumulated uncertainty and deserves a
+    correspondingly wider window. Only what survives both passes is new.
+    """
+
+    def __init__(self, *a, revive_scale=1.8, ghost_frames=40,
+                 dup_confirm=3, reid_px=0.0, **kw):
+        super().__init__(*a, **kw)
+        self.revive_scale = revive_scale
+        self.n_new = 0
+        self.n_revived = 0
+        self.n_suppressed = 0
+        self.n_reid = 0
+        # DIAGNOSTIC ONLY. Dead tracks are remembered but never re-attached —
+        # the point is to find out how often a "new" person is really a
+        # returning one, before deciding whether re-identification is worth
+        # building. Turning this into a fix would be a different change.
+        self.ghost_frames = ghost_frames
+        self.dup_confirm = dup_confirm
+        self.reid_px = reid_px
+        self.ghosts = []          # (id, x, y, w, h, frame_died, hits)
+        self.pending = []         # provisional births: [x, y, count, frame]
+        self.events = []          # rows for track_events.csv
+        self.frame = 0
+
+    def _classify(self, d, live_before):
+        """
+        Why did this detection not belong to an existing track?
+
+        Distinguishes the three failure modes that need different fixes:
+          gate_miss   a live track was near but outside the gate -> gate/cost
+          contested   two or more tracks were within reach -> greedy stole it
+          returning   a track died near here recently -> needs re-identification
+          genuine     nothing nearby, alive or dead -> a real new person
+        """
+        dx, dy = d["centroid"]
+        near = sorted(((((t.centroid[0] - dx) ** 2 +
+                         (t.centroid[1] - dy) ** 2) ** 0.5), t)
+                      for t in live_before)
+        g_near = sorted((((gx - dx) ** 2 + (gy - dy) ** 2) ** 0.5,
+                         gid, self.frame - fd, gh)
+                        for gid, gx, gy, gw, gh_, fd, gh in self.ghosts)
+        nd, nt = (near[0][0], near[0][1]) if near else (None, None)
+        gd, gid, gage, ghits = (g_near[0] if g_near else (None, None, None, None))
+        contested = sum(1 for dist, _ in near if dist <= self.gate_px * 2)
+
+        # ORDER MATTERS. A track sitting 7 px away with misses==0 was matched
+        # THIS frame — it was never out of reach, it was already taken, and the
+        # extra detection is a duplicate the deduper missed. Calling that
+        # "gate_miss" sent me looking at the gate, which was not the problem.
+        if nt is not None and nd <= self.gate_px and nt.misses == 0:
+            cause = "duplicate"
+        elif gd is not None and gd <= self.gate_px * 2:
+            cause = "returning"
+        elif nd is not None and nd <= self.gate_px * 3:
+            cause = "contested" if contested >= 2 else "gate_miss"
+        else:
+            cause = "genuine"
+        return {"cause": cause,
+                "near_track": nt.id if nt else "",
+                "near_dist": f"{nd:.1f}" if nd is not None else "",
+                "near_misses": nt.misses if nt else "",
+                "ghost_id": gid if gid is not None else "",
+                "ghost_dist": f"{gd:.1f}" if gd is not None else "",
+                "ghost_age": gage if gage is not None else "",
+                "n_within_2gate": contested}
+
+    def update(self, dets):
+        self.frame += 1
+        live_before = [t for t in self.tracks if t.hits >= self.min_hits]
+        snap = {t.id: (t.centroid, t.misses) for t in self.tracks}
+        for t in self.tracks:
+            t.predict()
+
+        def associate(tracks, det_idx, gate_for):
+            pairs = []
+            for t in tracks:
+                tx, ty = t.centroid
+                for di in det_idx:
+                    dx, dy = dets[di]["centroid"]
+                    d = ((tx - dx) ** 2 + (ty - dy) ** 2) ** 0.5
+                    if d <= gate_for(t):
+                        pairs.append((d, id(t), di, t))
+            pairs.sort(key=lambda p: p[0])
+            used_t, used_d = set(), set()
+            for d, tid, di, t in pairs:
+                if tid in used_t or di in used_d:
+                    continue
+                t.update(dets[di])
+                used_t.add(tid)
+                used_d.add(di)
+            return used_d
+
+        left = set(range(len(dets)))
+        live = [t for t in self.tracks if t.misses <= 1]
+        left -= associate(live, list(left), lambda t: self.gate_px)
+
+        coasting = [t for t in self.tracks if t.misses > 1]
+        if left and coasting:
+            before = len(left)
+            left -= associate(
+                coasting, list(left),
+                lambda t: self.gate_px * min(self.revive_scale, 1.0 + 0.18 * t.misses))
+            self.n_revived += before - len(left)
+
+        for i in sorted(left):
+            info = self._classify(dets[i], live_before)
+
+            # FIX A — provisional birth.
+            # A detection landing inside the gate of a track that was already
+            # matched this frame is, on the evidence, a duplicate box on one
+            # head: measured at 7.2 px from a matched track, alive 10 frames,
+            # 2 hits. But it could also be a second person walking up to the
+            # first, and those look identical for one frame. So neither trust
+            # nor discard it — require it to persist. A duplicate flickers and
+            # never reaches the count; a real person standing there does.
+            if info["cause"] == "duplicate" and self.dup_confirm > 1:
+                x, y = dets[i]["centroid"]
+                hit = None
+                for pnd in self.pending:
+                    if abs(pnd[0] - x) <= self.gate_px * 0.5 and \
+                       abs(pnd[1] - y) <= self.gate_px * 0.5 and \
+                       self.frame - pnd[3] <= 2:
+                        hit = pnd
+                        break
+                if hit is None:
+                    self.pending.append([x, y, 1, self.frame])
+                    self.n_suppressed += 1
+                    continue
+                hit[0], hit[1], hit[3] = x, y, self.frame
+                hit[2] += 1
+                if hit[2] < self.dup_confirm:
+                    self.n_suppressed += 1
+                    continue
+                self.pending.remove(hit)
+                info["cause"] = "duplicate_promoted"
+
+            t = KalmanTrack(dets[i])
+
+            # FIX B — re-identification.
+            # Measured: a track died, the person was gone 33 frames, came back
+            # 3.8 px from where it died, and was issued a new id. For occupancy
+            # counting that is not cosmetic — it reads as a departure plus an
+            # arrival when nobody entered or left.
+            if self.reid_px > 0:
+                x, y = dets[i]["centroid"]
+                cand = [(((gx - x) ** 2 + (gy - y) ** 2) ** 0.5, k, g)
+                        for k, g in enumerate(self.ghosts)
+                        for gid, gx, gy, gw, gh_, fd, gh in [g]]
+                cand = [c for c in cand if c[0] <= self.reid_px]
+                if cand:
+                    cand.sort()
+                    _, k, g = cand[0]
+                    t.id = g[0]
+                    KalmanTrack._next_id -= 1
+                    self.ghosts.pop(k)
+                    self.n_reid += 1
+                    info["cause"] = info["cause"] + "_reid"
+
+            self.tracks.append(t)
+            self.n_new += 1
+            x, y = dets[i]["centroid"]
+            self.events.append(dict(frame=self.frame, event="birth", id=t.id,
+                                    x=f"{x:.1f}", y=f"{y:.1f}",
+                                    n_dets=len(dets), n_tracks=len(self.tracks),
+                                    **info))
+
+        dead = [t for t in self.tracks if t.misses > self.max_misses]
+        for t in dead:
+            x, y, w, h = t.bbox
+            self.ghosts.append((t.id, t.centroid[0], t.centroid[1], w, h,
+                                self.frame, t.hits))
+            self.events.append(dict(frame=self.frame, event="death", id=t.id,
+                                    x=f"{t.centroid[0]:.1f}",
+                                    y=f"{t.centroid[1]:.1f}",
+                                    n_dets=len(dets), n_tracks=len(self.tracks),
+                                    cause=f"age{t.age}_hits{t.hits}",
+                                    near_track="", near_dist="", near_misses="",
+                                    ghost_id="", ghost_dist="", ghost_age="",
+                                    n_within_2gate=""))
+        self.tracks = [t for t in self.tracks if t.misses <= self.max_misses]
+        self.ghosts = [g for g in self.ghosts
+                       if self.frame - g[5] <= self.ghost_frames]
+        self.pending = [q for q in self.pending if self.frame - q[3] <= 2]
+        return self.tracks
 
 
 def omega_to_body(x, y, w, h, det=None):
@@ -306,6 +561,28 @@ def main():
                     help="force a CNN re-confirmation if a track has coasted "
                          "this many frames. Bounds how long a wrong identity "
                          "can live on Kalman momentum. ~2.3 s at 8.7 fps.")
+    ap.add_argument("--dup-confirm", type=int, default=3,
+                    help="a detection appearing inside the gate of an ALREADY "
+                         "MATCHED track must persist this many frames before it "
+                         "gets its own id. Duplicate boxes flicker and never "
+                         "qualify; a second person standing there does. 1 "
+                         "disables.")
+    ap.add_argument("--reid-px", type=float, default=25.0,
+                    help="a new detection within this many px of a recently "
+                         "dead track reclaims its id instead of getting a new "
+                         "one. 0 disables. Measured need: 3.8 px after a "
+                         "33-frame absence.")
+    ap.add_argument("--ghost-frames", type=int, default=45,
+                    help="how long a dead track stays re-identifiable")
+    ap.add_argument("--revive", type=float, default=1.8,
+                    help="how far the association gate may widen for a coasting "
+                         "track, as a multiple of --gate. This is what stops a "
+                         "one-frame detection dropout from becoming a new id "
+                         "and a new colour.")
+    ap.add_argument("--no-dedup", action="store_true",
+                    help="disable omega de-duplication (for diagnosing)")
+    ap.add_argument("--dedup-iou", type=float, default=0.15)
+    ap.add_argument("--dedup-centre", type=float, default=1.4)
     ap.add_argument("--gate", type=float, default=30.0,
                     help="px radius for blob-to-track association")
     ap.add_argument("--max-misses", type=int, default=8)
@@ -384,8 +661,10 @@ def main():
                  "yolo_ran", "trigger", "infer_ms", "loop_ms", "ambient_c",
                  "note"])
 
-    mt = MultiTracker(max_misses=args.max_misses, min_hits=args.min_hits,
-                      gate_px=args.gate)
+    mt = StickyTracker(max_misses=args.max_misses, min_hits=args.min_hits,
+                       gate_px=args.gate, revive_scale=args.revive,
+                       ghost_frames=args.ghost_frames,
+                       dup_confirm=args.dup_confirm, reid_px=args.reid_px)
     S = max(2, args.scale)
     WIN = "FLUXNET  integrated"
     cv2.namedWindow(WIN, cv2.WINDOW_AUTOSIZE)
@@ -465,6 +744,8 @@ def main():
             if run_yolo:
                 t0 = time.time()
                 dets, bodies = yolo_omegas(model, data, args.conf, args.imgsz)
+                if not args.no_dedup:
+                    dets = dedup(dets, args.dedup_iou, args.dedup_centre)
                 infer_ms = 0.9 * infer_ms + 0.1 * (1000 * (time.time() - t0))
                 last_cnn_frame = frame_i
                 n_yolo += 1
@@ -516,6 +797,11 @@ def main():
                               (70, 70, 90), 1)
 
         for t in mt.tracks:
+            # Unconfirmed tracks are not drawn. A track that lives one frame
+            # would otherwise flash a brand-new colour on screen, which reads
+            # as an id change even though nothing was ever counted.
+            if t.hits < args.min_hits:
+                continue
             col = TRACK_COLS[t.id % len(TRACK_COLS)]
             ox, oy, ow, oh = t.bbox
             solid = t.misses == 0
@@ -617,12 +903,33 @@ def main():
 
     cv2.destroyAllWindows()
     fh.close()
+
+    ev_path = os.path.join(TD.LOG_DIR, f"integrated_{stamp}_events.csv")
+    cols = ["frame", "event", "id", "x", "y", "cause", "near_track",
+            "near_dist", "near_misses", "ghost_id", "ghost_dist", "ghost_age",
+            "n_within_2gate", "n_dets", "n_tracks"]
+    with open(ev_path, "w", newline="") as efh:
+        w = csv.DictWriter(efh, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for e in mt.events:
+            w.writerow(e)
     duty = 100.0 * n_yolo / max(1, frame_i)
     print(f"\nframes           {frame_i}")
     print(f"CNN ran          {n_yolo}  ({duty:.1f}% duty)")
     print(f"inference        {infer_ms:.0f} ms   classical {blob_ms:.1f} ms")
     print(f"mean loop        {loop_ms:.0f} ms")
     print(f"log              {csv_path}")
+    print(f"track events     {ev_path}")
+    births = [e for e in mt.events if e["event"] == "birth"]
+    if births:
+        import collections as _c
+        tally = _c.Counter(e["cause"] for e in births)
+        print(f"\ntrack births     {len(births)}")
+        for k, v in tally.most_common():
+            print(f"  {k:<12} {v:4d}  ({100.0 * v / len(births):.0f}%)")
+        print(f"  suppressed dups  {mt.n_suppressed}")
+        print(f"  ids reclaimed    {mt.n_reid}")
+        print(f"\n  python3 track_report.py {ev_path}")
     if saved:
         print(f"saved frames     {out_dir}")
     print(f"\nCompare against --always-yolo on the same scene: if the counts\n"
