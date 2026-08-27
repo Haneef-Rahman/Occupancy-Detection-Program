@@ -1,0 +1,11 @@
+frame,event,id,x,y,cause,near_track,near_dist,near_misses,ghost_id,ghost_dist,ghost_age,n_within_2gate,n_dets,n_tracks
+94,birth,1,144.1,114.8,genuine,,,,,,,0,1,1
+160,death,1,105.5,128.6,age67_hits57,,,,,,,,0,1
+241,birth,2,140.3,114.9,genuine,,,,,,,0,1,1
+473,death,2,152.0,117.0,age233_hits215,,,,,,,,0,1
+954,birth,3,139.5,113.0,genuine,,,,,,,0,1,1
+1312,death,3,154.9,125.4,age359_hits344,,,,,,,,0,1
+2811,birth,4,151.3,116.1,genuine,,,,,,,0,1,1
+2821,death,4,159.4,114.1,age11_hits2,,,,,,,,0,1
+2904,birth,5,153.2,114.8,genuine,,,,,,,0,1,1
+2915,death,5,138.4,114.1,age12_hits3,,,,,,,,0,1

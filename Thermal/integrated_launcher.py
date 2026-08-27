@@ -91,8 +91,100 @@ from tracker import MultiTracker, KalmanTrack
 
 SPAN_C = (15.0, 45.0)      # MUST match make_dataset.py — the model's encoding
 SIDEBAR_W = 340
-TRACK_COLS = [(90, 255, 120), (60, 220, 255), (255, 170, 90), (200, 130, 255),
-              (120, 200, 255), (150, 255, 200), (255, 220, 120)]
+
+# One palette, named, so a colour means the same thing everywhere. BGR.
+C_BG      = (18, 17, 16)
+C_PANEL   = (30, 28, 26)
+C_RULE    = (58, 54, 50)
+C_TEXT    = (232, 230, 226)
+C_DIM     = (140, 136, 130)
+C_FAINT   = (96, 93, 89)
+C_OK      = (120, 220, 130)
+C_WARN    = (70, 190, 255)
+C_BAD     = (90, 95, 250)
+C_ACCENT  = (255, 214, 130)
+F = cv2.FONT_HERSHEY_SIMPLEX
+
+TRACK_COLS = [(120, 240, 150), (90, 220, 255), (255, 180, 110), (215, 150, 255),
+              (150, 210, 255), (170, 255, 215), (255, 225, 150)]
+
+
+# ---------------------------------------------------------------------------
+# drawing helpers
+#
+# HERSHEY fonts are PROPORTIONAL, so the obvious f"{name:<12}{value:>7}" does
+# not align anything — the columns wander by several pixels per row and the
+# panel reads as sloppy. Every value here is positioned by measuring its own
+# width and subtracting from the right edge, which is the only way to get a
+# straight column out of a proportional font.
+# ---------------------------------------------------------------------------
+
+def _tw(txt, sc, th=1):
+    return cv2.getTextSize(txt, F, sc, th)[0][0]
+
+
+def row(img, y, label, value=None, col=None, sc=0.44, vcol=None, pad=14):
+    cv2.putText(img, label, (pad, y), F, sc, col or C_DIM, 1, cv2.LINE_AA)
+    if value is not None:
+        v = str(value)
+        cv2.putText(img, v, (img.shape[1] - pad - _tw(v, sc), y), F, sc,
+                    vcol or C_TEXT, 1, cv2.LINE_AA)
+    return y
+
+
+def head(img, y, txt, pad=14):
+    """Small caps section label with a hairline under it."""
+    cv2.putText(img, txt, (pad, y), F, 0.38, C_FAINT, 1, cv2.LINE_AA)
+    cv2.line(img, (pad, y + 6), (img.shape[1] - pad, y + 6), C_RULE, 1)
+    return y
+
+
+def chip(img, x, y, txt, col, sc=0.4):
+    """Filled pill — reads as a state, not as another line of text."""
+    w = _tw(txt, sc) + 16
+    cv2.rectangle(img, (x, y - 13), (x + w, y + 6), col, -1)
+    cv2.putText(img, txt, (x + 8, y + 1), F, sc, C_BG, 1, cv2.LINE_AA)
+    return x + w + 7
+
+
+def meter(img, x, y, w, frac, col, h=5):
+    """Thin progress bar. A number tells you the value; a bar tells you where
+    it sits in its range, which is what you actually want at a glance."""
+    cv2.rectangle(img, (x, y), (x + w, y + h), C_PANEL, -1)
+    f = int(w * max(0.0, min(1.0, frac)))
+    if f > 0:
+        cv2.rectangle(img, (x, y), (x + f, y + h), col, -1)
+
+
+def spark(img, x, y, w, h, series, col, vmax=None):
+    """Occupancy over the last N frames — shows flicker that a single number
+    hides. A count alternating 1,2,1,2 and a steady 2 look identical live."""
+    cv2.rectangle(img, (x, y), (x + w, y + h), C_PANEL, -1)
+    if len(series) < 2:
+        return
+    m = max(1, vmax or max(series))
+    n = len(series)
+    pts = [(x + int(w * i / (n - 1)), y + h - int((h - 2) * v / m))
+           for i, v in enumerate(series)]
+    cv2.polylines(img, [np.array(pts, np.int32)], False, col, 1, cv2.LINE_AA)
+
+
+def corners(img, p0, p1, col, th=2, frac=0.28):
+    """
+    Corner ticks instead of a closed rectangle.
+
+    The thermal image is 160x120 upscaled; a person can be 15 px tall, so a
+    full rectangle drawn around them covers much of the evidence you are trying
+    to look at. Ticks mark the same extent while leaving the subject visible.
+    """
+    x0, y0 = p0
+    x1, y1 = p1
+    lx = max(3, int((x1 - x0) * frac))
+    ly = max(3, int((y1 - y0) * frac))
+    for (ax, ay, dx, dy) in ((x0, y0, 1, 1), (x1, y0, -1, 1),
+                             (x0, y1, 1, -1), (x1, y1, -1, -1)):
+        cv2.line(img, (ax, ay), (ax + dx * lx, ay), col, th, cv2.LINE_AA)
+        cv2.line(img, (ax, ay), (ax, ay + dy * ly), col, th, cv2.LINE_AA)
 
 
 # Parameters adjustable while running. live_yolo.py had [ and ] for confidence
@@ -712,6 +804,7 @@ def main():
     show_bar, show_blobs, show_trails = True, False, True
     frame_i = saved = n_yolo = 0
     sel = 0                          # which TUNABLE [ and ] act on
+    occ_hist = []                    # confirmed count history, for the sparkline
     force_yolo = True                 # first frame always seeds from the CNN
     last_cnn_frame = -999
     infer_ms = blob_ms = loop_ms = 0.0
@@ -828,107 +921,173 @@ def main():
                 x, y, w, h = b["bbox"]
                 cv2.rectangle(vis, (int(x * S), int(y * S)),
                               (int((x + w) * S), int((y + h) * S)),
-                              (90, 90, 105), 1)
+                              C_FAINT, 1)
 
         if args.show_person:
             for (x, y, w, h), v in bodies:
                 cv2.rectangle(vis, (int(x * S), int(y * S)),
                               (int((x + w) * S), int((y + h) * S)),
-                              (70, 70, 90), 1)
+                              (72, 68, 64), 1)
 
         for t in mt.tracks:
-            # Unconfirmed tracks are not drawn. A track that lives one frame
-            # would otherwise flash a brand-new colour on screen, which reads
-            # as an id change even though nothing was ever counted.
+            # Unconfirmed tracks are not drawn: a one-frame track would flash a
+            # new colour that reads as an id change though nothing was counted.
             if t.hits < args.min_hits:
                 continue
             col = TRACK_COLS[t.id % len(TRACK_COLS)]
             ox, oy, ow, oh = t.bbox
             solid = t.misses == 0
+
+            # trail first, so boxes and labels sit on top of it
+            tr = trail.get(t.id, [])
+            if show_trails and len(tr) > 1:
+                # fade with age: a uniform line implies the whole path is
+                # equally current, when only the head of it is
+                for i in range(1, len(tr)):
+                    f = i / len(tr)
+                    c = tuple(int(C_BG[k] + (col[k] - C_BG[k]) * (0.15 + 0.85 * f))
+                              for k in range(3))
+                    cv2.line(vis,
+                             (int(tr[i - 1][0] * S), int(tr[i - 1][1] * S)),
+                             (int(tr[i][0] * S), int(tr[i][1] * S)),
+                             c, 1, cv2.LINE_AA)
+
+            def draw_box(bx, by, bw_, bh_, thick):
+                corners(vis, (int(bx * S), int(by * S)),
+                        (int((bx + bw_) * S), int((by + bh_) * S)), col, thick)
+
             if args.box in ("body", "both"):
-                bx, by, bw_, bh_ = omega_to_body(ox, oy, ow, oh, t.det)
-                cv2.rectangle(vis, (int(bx * S), int(by * S)),
-                              (int((bx + bw_) * S), int((by + bh_) * S)),
-                              col, 2 if solid else 1)
+                draw_box(*omega_to_body(ox, oy, ow, oh, t.det), 2 if solid else 1)
             if args.box in ("omega", "both"):
-                cv2.rectangle(vis, (int(ox * S), int(oy * S)),
-                              (int((ox + ow) * S), int((oy + oh) * S)),
-                              col, 2 if solid else 1)
-            if args.box == "body":
-                x, y, w, h = omega_to_body(ox, oy, ow, oh, t.det)
-            else:
-                x, y, w, h = ox, oy, ow, oh
+                draw_box(ox, oy, ow, oh, 2 if solid else 1)
+
+            x, y, w, h = (omega_to_body(ox, oy, ow, oh, t.det)
+                          if args.box == "body" else (ox, oy, ow, oh))
             p0 = (int(x * S), int(y * S))
             p1 = (int((x + w) * S), int((y + h) * S))
+
             cf = t.det.get("conf")
-            tag = f"#{t.id}" + (f" {cf:.2f}" if cf is not None and solid else "")
-            if not solid:
-                tag += f" coast{t.misses}"
-            (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
-            ly = min(vis.shape[0] - 3, p1[1] + th + 5)
-            cv2.rectangle(vis, (p0[0], ly - th - 3),
-                          (p0[0] + tw + 4, ly + 2), (18, 18, 20), -1)
-            cv2.putText(vis, tag, (p0[0] + 2, ly), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.44, col, 1, cv2.LINE_AA)
-            if show_trails and len(trail.get(t.id, [])) > 1:
-                pts = np.array([[int(a * S), int(b * S)]
-                                for a, b in trail[t.id]], np.int32)
-                cv2.polylines(vis, [pts], False, col, 1, cv2.LINE_AA)
+            tag = f"{t.id}"
+            sub = (f"{cf:.2f}" if cf is not None and solid else
+                   f"coast {t.misses}" if not solid else "")
+            # id badge: a filled square reads at a glance and cannot be lost
+            # against a bright thermal background the way thin text can
+            bs = 17
+            bx0, by0 = p0[0], max(0, p0[1] - bs - 3)
+            cv2.rectangle(vis, (bx0, by0), (bx0 + bs, by0 + bs), col, -1)
+            cv2.putText(vis, tag, (bx0 + 6 - (2 if len(tag) > 1 else 0),
+                                   by0 + bs - 4), F, 0.42, C_BG, 1, cv2.LINE_AA)
+            if sub:
+                sw = _tw(sub, 0.38) + 8
+                cv2.rectangle(vis, (bx0 + bs + 3, by0),
+                              (bx0 + bs + 3 + sw, by0 + bs), (26, 24, 22), -1)
+                cv2.putText(vis, sub, (bx0 + bs + 7, by0 + bs - 4), F, 0.38,
+                            col if solid else C_DIM, 1, cv2.LINE_AA)
+
+        occ_hist.append(len(mt.confirmed()))
+        if len(occ_hist) > 120:
+            occ_hist.pop(0)
 
         if show_bar:
-            bar = np.full((vis.shape[0], SIDEBAR_W, 3), 16, np.uint8)
+            H = vis.shape[0]
+            bar = np.full((H, SIDEBAR_W, 3), C_BG, np.uint8)
             conf_n = len(mt.confirmed())
-
-            def put(y, txt, col=(215, 215, 225), sc=0.46, th=1):
-                cv2.putText(bar, txt, (12, y), cv2.FONT_HERSHEY_SIMPLEX, sc,
-                            col, th, cv2.LINE_AA)
-
-            put(30, "OCCUPANCY", (150, 150, 165), 0.42)
-            cv2.putText(bar, str(conf_n), (12, 86), cv2.FONT_HERSHEY_SIMPLEX,
-                        1.9, (90, 255, 120), 3, cv2.LINE_AA)
-            put(116, f"tracks     {len(mt.tracks)}")
-            put(138, f"blobs      {'-' if pure else len(blobs)}")
-            y = 174
-            put(y, "CNN", (150, 150, 165), 0.42); y += 24
             duty = 100.0 * n_yolo / max(1, frame_i)
-            dcol = (120, 220, 130) if duty < 25 else \
-                   (70, 190, 255) if duty < 60 else (80, 90, 255)
-            put(y, f"duty       {duty:.0f}%", dcol); y += 22
-            put(y, f"ran        {n_yolo}/{frame_i}"); y += 22
-            put(y, f"trigger    {trigger[:18]}", (170, 170, 185), 0.42); y += 22
-            put(y, f"since      {frame_i - last_cnn_frame} f"); y += 26
-            put(y, "SPEED", (150, 150, 165), 0.42); y += 24
-            put(y, f"infer      {infer_ms:.0f} ms"); y += 22
-            put(y, f"blobs      {'off' if pure else f'{blob_ms:.1f} ms'}"); y += 22
-            put(y, f"loop       {loop_ms:.0f} ms"); y += 22
-            saved_ms = (1 - n_yolo / max(1, frame_i)) * infer_ms
-            put(y, f"saved/f    {saved_ms:.0f} ms", (120, 220, 130)); y += 26
-            put(y, f"ambient    {float(np.median(data)):.1f} C"); y += 22
-            put(y, f"saved      {saved}"); y += 22
-            if pure:
-                put(y, "MODE: YOLO", (70, 190, 255), 0.5, 2); y += 22
-            if logging_on:
-                put(y, "LOGGING", (80, 90, 255), 0.5, 2); y += 22
+            W = SIDEBAR_W
+
+            # ---- title -------------------------------------------------
+            cv2.rectangle(bar, (0, 0), (W, 34), C_PANEL, -1)
+            cv2.putText(bar, "FLUXNET", (14, 22), F, 0.5, C_TEXT, 1, cv2.LINE_AA)
+            mtxt = "YOLO" if pure else "HYBRID"
+            cv2.putText(bar, mtxt, (W - 14 - _tw(mtxt, 0.42), 22), F, 0.42,
+                        C_WARN if pure else C_OK, 1, cv2.LINE_AA)
+
+            # ---- occupancy ---------------------------------------------
+            cv2.rectangle(bar, (14, 48), (W - 14, 132), C_PANEL, -1)
+            cv2.rectangle(bar, (14, 48), (17, 132), C_OK, -1)
+            cv2.putText(bar, "OCCUPANCY", (28, 68), F, 0.38, C_FAINT, 1, cv2.LINE_AA)
+            big = str(conf_n)
+            cv2.putText(bar, big, (28, 118), F, 1.9, C_OK, 3, cv2.LINE_AA)
+            cv2.putText(bar, f"tracks {len(mt.tracks)}", (28 + _tw(big, 1.9) + 16, 100),
+                        F, 0.4, C_DIM, 1, cv2.LINE_AA)
+            cv2.putText(bar, f"blobs {'-' if pure else len(blobs)}",
+                        (28 + _tw(big, 1.9) + 16, 118), F, 0.4, C_DIM, 1, cv2.LINE_AA)
+            spark(bar, W - 26 - 84, 58, 84, 24, occ_hist, C_OK,
+                  vmax=max(2, max(occ_hist) if occ_hist else 2))
+
+            # The bottom block is fixed height; everything above it flows.
+            # Without a floor the flowing rows overwrite the tunables at small
+            # --scale, which is exactly what happened at scale 5 / 600 px.
+            floor = H - 40 - 19 * len(TUNABLES) - 26
+
+            def fits(y, need=20):
+                return y + need <= floor
+
+            y = 158
+            head(bar, y, "DETECTOR"); y += 24
+            dcol = C_OK if duty < 25 else C_WARN if duty < 60 else C_BAD
+            row(bar, y, "cnn duty", f"{duty:.0f}%", vcol=dcol); y += 8
+            meter(bar, 14, y, W - 28, duty / 100.0, dcol); y += 20
+            if fits(y): row(bar, y, "ran", f"{n_yolo}/{frame_i}"); y += 20
+            if fits(y): row(bar, y, "trigger", trigger[:16], vcol=C_ACCENT); y += 20
+            if fits(y): row(bar, y, "since", f"{frame_i - last_cnn_frame} f"); y += 28
+
+            if fits(y, 44):
+                head(bar, y, "TIMING"); y += 24
+                row(bar, y, "inference", f"{infer_ms:.0f} ms"); y += 20
+                if fits(y): row(bar, y, "classical",
+                                "off" if pure else f"{blob_ms:.0f} ms"); y += 20
+                if fits(y): row(bar, y, "loop", f"{loop_ms:.0f} ms",
+                                vcol=C_OK if loop_ms < 115 else C_WARN); y += 20
+                saved_ms = (1 - n_yolo / max(1, frame_i)) * infer_ms
+                if fits(y) and not pure:
+                    row(bar, y, "saved/frame", f"{saved_ms:.0f} ms", vcol=C_OK)
+                    y += 20
+                y += 8
+
+            if fits(y, 44):
+                head(bar, y, "IDENTITY"); y += 24
+                row(bar, y, "births", mt.n_new); y += 20
+                if fits(y): row(bar, y, "dups held", mt.n_suppressed); y += 20
+                if fits(y): row(bar, y, "ids reclaimed", mt.n_reid,
+                                vcol=C_OK if mt.n_reid else C_TEXT); y += 20
+                y += 8
+            if fits(y): row(bar, y, "ambient",
+                            f"{float(np.median(data)):.1f} C"); y += 20
+
+            # ---- state chips, always shown; they are state, not detail ---
+            cy = min(y + 12, floor + 16)
+            cx = 14
             if paused:
-                put(y, "PAUSED", (70, 190, 255), 0.5, 2)
-            y = bar.shape[0] - 46 - 20 * len(TUNABLES)
-            put(y, "TUNE   TAB select   [ ] adjust", (150, 150, 165), 0.42)
-            y += 20
+                cx = chip(bar, cx, cy, "PAUSED", C_WARN)
+            if logging_on:
+                cx = chip(bar, cx, cy, "REC", C_BAD)
+            if args.no_dedup:
+                cx = chip(bar, cx, cy, "NO DEDUP", C_DIM)
+
+            # ---- tunables, pinned to the bottom -------------------------
+            ty = floor + 26
+            head(bar, ty, "TUNE      TAB select    [ ]  adjust"); ty += 22
             for i, (nm, attr, _st, _lo, _hi, fmt) in enumerate(TUNABLES):
                 on = i == sel
-                val = getattr(args, attr)
-                txt = f"{'>' if on else ' '} {nm:<12}{fmt.format(val):>7}"
-                cv2.putText(bar, txt, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
-                            (255, 220, 120) if on else (150, 150, 162),
-                            1, cv2.LINE_AA)
-                y += 20
-            cv2.putText(bar, "p box  o person  d dedup  r reset  s save",
-                        (12, bar.shape[0] - 22), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.36, (110, 110, 122), 1, cv2.LINE_AA)
-            cv2.putText(bar, "q quit  space pause  y yolo  b blobs  t trails",
-                        (12, bar.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.36, (110, 110, 122), 1, cv2.LINE_AA)
-            vis = np.hstack([vis, bar])
+                val = fmt.format(getattr(args, attr))
+                if on:
+                    cv2.rectangle(bar, (8, ty - 12), (W - 8, ty + 5), C_PANEL, -1)
+                    cv2.rectangle(bar, (8, ty - 12), (10, ty + 5), C_ACCENT, -1)
+                cv2.putText(bar, nm, (16, ty), F, 0.42,
+                            C_ACCENT if on else C_DIM, 1, cv2.LINE_AA)
+                cv2.putText(bar, val, (W - 16 - _tw(val, 0.42), ty), F, 0.42,
+                            C_ACCENT if on else C_TEXT, 1, cv2.LINE_AA)
+                ty += 19
+
+            cv2.line(bar, (14, H - 32), (W - 14, H - 32), C_RULE, 1)
+            cv2.putText(bar, "p box   o person   d dedup   r reset   s save",
+                        (14, H - 19), F, 0.34, C_FAINT, 1, cv2.LINE_AA)
+            cv2.putText(bar, "q quit   space pause   y yolo   b blobs   t trails",
+                        (14, H - 6), F, 0.34, C_FAINT, 1, cv2.LINE_AA)
+
+            sep = np.full((H, 1, 3), C_RULE, np.uint8)
+            vis = np.hstack([vis, sep, bar])
 
         cv2.imshow(WIN, vis)
         k = cv2.waitKey(1) & 0xFF
