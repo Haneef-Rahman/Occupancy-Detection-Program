@@ -1,4 +1,4 @@
-path: /Users/haneefrahman2650/Documents/GitHub/Occupancy-Detection-Program/Thermal/datasets/v2
+path: /Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/datasets/v2
 train: train/images
 val: val/images
 
