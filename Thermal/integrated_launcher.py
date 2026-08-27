@@ -346,7 +346,9 @@ class StickyTracker(MultiTracker):
     """
 
     def __init__(self, *a, revive_scale=1.8, ghost_frames=40,
-                 dup_confirm=3, reid_px=0.0, **kw):
+                 dup_confirm=3, reid_px=0.0, exit_margin=12.0,
+                 occl_timeout=350, occl_clear=6, frame_wh=(160, 120),
+                 occl_enabled=True, use_ledger=True, ledger_decay=600, **kw):
         super().__init__(*a, **kw)
         self.revive_scale = revive_scale
         self.n_new = 0
@@ -360,6 +362,120 @@ class StickyTracker(MultiTracker):
         self.ghost_frames = ghost_frames
         self.dup_confirm = dup_confirm
         self.reid_px = reid_px
+        # ---- occlusion memory -------------------------------------------
+        # A person cannot evaporate from the middle of a room. They enter and
+        # leave through the frame boundary, so WHERE a track dies is evidence
+        # about WHY. Dying near an edge is consistent with walking out; dying
+        # in the interior is not, and means the view was blocked.
+        # A separate switch, not exit_margin=0. Setting the margin to zero
+        # makes at_edge() almost never true, so EVERY death looks interior and
+        # occlusion memory runs at full strength — the exact opposite of off.
+        self.occl_enabled = occl_enabled
+        self.exit_margin = exit_margin
+        self.occl_timeout = occl_timeout
+        self.occl_clear = occl_clear
+        # Only applied where the scene has never hidden anyone. Much more
+        # patient than the old value, because empty floor is weak evidence.
+        self.occl_clear_hard = occl_clear * 5
+        self.occl_map = {}
+        self.occl_learn = 1
+        self.use_ledger = use_ledger
+        self.ledger_decay = ledger_decay
+        self.ledger = 0
+        self.n_entries = 0
+        self.n_exits = 0
+        self.n_decayed = 0
+        self.surplus_since = 0
+        self.frame_wh = frame_wh
+        self.occluded = []        # people known present but not currently seen
+        self.n_occluded = 0
+        self.n_recovered = 0
+        self.n_exited = 0
+        self.n_gaveup = 0
+        self.ghosts = []          # (id, x, y, w, h, frame_died, hits)
+        self.pending = []         # provisional births: [x, y, count, frame]
+        self.events = []          # rows for track_events.csv
+        self.frame = 0
+
+    def at_edge(self, x, y):
+        W, H = self.frame_wh
+        m = self.exit_margin
+        return x <= m or y <= m or x >= W - m or y >= H - m
+
+    def resolve_occluded(self, dets, cnn_ran):
+        """
+        Decide whether an out-of-sight person is still out of sight.
+
+        THE MISTAKE THIS REPLACES. The first version dropped a hidden person
+        once the CNN looked at their last position and saw nothing, reasoning
+        that a clear view of empty space proves absence. It does not. The thing
+        hiding someone is usually FURNITURE, and furniture is at room
+        temperature — invisible to a thermal detector and to any check that
+        asks "is another track nearby?". Crouch behind a table in open floor
+        and that test sees empty space and declares you gone, which is exactly
+        backwards: a person who ducks behind a desk is the case the memory
+        exists for.
+
+        What actually bounds the room is the BOUNDARY. People enter and leave
+        through the frame edge, so absence is proven by an observed exit, not
+        by an empty patch of floor. A hidden person is therefore kept until
+        one of three things happens: they reappear, an exit is observed that
+        must have been them, or the timeout expires as a last resort.
+
+        The clear-space signal is kept only as a WEAK vote, and only where the
+        scene has never hidden anyone before. If a track has previously
+        vanished and reappeared at this spot, the location is a known occluder
+        and empty space there means nothing.
+        """
+        keep = []
+        for o in self.occluded:
+            age = self.frame - o["frame_lost"]
+            if age > self.occl_timeout:
+                self.n_gaveup += 1
+                self.events.append(dict(
+                    frame=self.frame, event="giveup", id=o["id"],
+                    x=f"{o['x']:.1f}", y=f"{o['y']:.1f}",
+                    cause=f"timeout{age}f", near_track="", near_dist="",
+                    near_misses="", ghost_id="", ghost_dist="", ghost_age=age,
+                    n_within_2gate="", n_dets=len(dets),
+                    n_tracks=len(self.tracks)))
+                continue
+            if self.is_occluder_zone(o["x"], o["y"]):
+                o["clear"] = 0            # known hiding place: prove nothing
+            else:
+                blocked = any(((d["centroid"][0] - o["x"]) ** 2 +
+                               (d["centroid"][1] - o["y"]) ** 2) ** 0.5
+                              <= self.gate_px * 1.5 for d in dets) or any(
+                    ((t.centroid[0] - o["x"]) ** 2 +
+                     (t.centroid[1] - o["y"]) ** 2) ** 0.5 <= self.gate_px * 1.5
+                    for t in self.tracks)
+                if blocked:
+                    o["clear"] = 0
+                elif cnn_ran:
+                    o["clear"] += 1
+                    if o["clear"] >= self.occl_clear_hard:
+                        self.n_gaveup += 1
+                        continue
+            keep.append(o)
+        self.occluded = keep
+
+    # ---- learned occluder map --------------------------------------------
+    # Where have people vanished and then come back? Those places hide people:
+    # a desk, a partition, a pillar. The map is built from the tracker's own
+    # mistakes, so it needs no configuration and adapts to whatever room the
+    # sensor is pointed at. A 16x12 grid over a 160x120 sensor is 10 px per
+    # cell — about a body width at mid range.
+    def _cell(self, x, y):
+        W, H = self.frame_wh
+        return (min(15, max(0, int(x * 16 / max(1, W)))),
+                min(11, max(0, int(y * 12 / max(1, H)))))
+
+    def note_occluder(self, x, y):
+        c = self._cell(x, y)
+        self.occl_map[c] = self.occl_map.get(c, 0) + 1
+
+    def is_occluder_zone(self, x, y):
+        return self.occl_map.get(self._cell(x, y), 0) >= self.occl_learn
         self.ghosts = []          # (id, x, y, w, h, frame_died, hits)
         self.pending = []         # provisional births: [x, y, count, frame]
         self.events = []          # rows for track_events.csv
@@ -433,6 +549,8 @@ class StickyTracker(MultiTracker):
                 used_d.add(di)
             return used_d
 
+        born_edge = 0
+        died_edge = 0
         left = set(range(len(dets)))
         live = [t for t in self.tracks if t.misses <= 1]
         left -= associate(live, list(left), lambda t: self.gate_px)
@@ -479,6 +597,39 @@ class StickyTracker(MultiTracker):
 
             t = KalmanTrack(dets[i])
 
+            # FIX C — recover an occluded person.
+            # Checked BEFORE ordinary re-identification and with a wider
+            # radius, because an occluded person is not merely someone we saw
+            # recently: they are someone we have positive reason to believe
+            # never left. They also drift while hidden — the sitter shifts,
+            # the hidden person leans — so the window has to be generous.
+            if self.occl_enabled and self.occluded:
+                x, y = dets[i]["centroid"]
+                cands = sorted(
+                    ((((o["x"] - x) ** 2 + (o["y"] - y) ** 2) ** 0.5, k)
+                     for k, o in enumerate(self.occluded)))
+                if cands and cands[0][0] <= self.gate_px * 2.5:
+                    o = self.occluded.pop(cands[0][1])
+                    t.id = o["id"]
+                    KalmanTrack._next_id -= 1
+                    self.n_recovered += 1
+                    # This spot demonstrably hides people. Remember it, so the
+                    # next disappearance here is not second-guessed.
+                    self.note_occluder(o["x"], o["y"])
+                    info["cause"] = "occlusion_recovered"
+                    self.events.append(dict(
+                        frame=self.frame, event="recover", id=t.id,
+                        x=f"{x:.1f}", y=f"{y:.1f}",
+                        cause=f"hidden{self.frame - o['frame_lost']}f",
+                        near_track=o["occluder"] or "", near_dist="",
+                        near_misses="", ghost_id="", ghost_dist="",
+                        ghost_age=self.frame - o["frame_lost"],
+                        n_within_2gate="", n_dets=len(dets),
+                        n_tracks=len(self.tracks)))
+                    self.tracks.append(t)
+                    self.n_new += 1
+                    continue
+
             # FIX B — re-identification.
             # Measured: a track died, the person was gone 33 frames, came back
             # 3.8 px from where it died, and was issued a new id. For occupancy
@@ -510,8 +661,30 @@ class StickyTracker(MultiTracker):
         dead = [t for t in self.tracks if t.misses > self.max_misses]
         for t in dead:
             x, y, w, h = t.bbox
-            self.ghosts.append((t.id, t.centroid[0], t.centroid[1], w, h,
-                                self.frame, t.hits))
+            cx, cy = t.centroid
+            self.ghosts.append((t.id, cx, cy, w, h, self.frame, t.hits))
+
+            if (self.occl_enabled and t.hits >= self.min_hits
+                    and not self.at_edge(cx, cy)):
+                # Interior death. Who was next to them when they vanished? If
+                # another track was within merging distance, that is positive
+                # evidence of occlusion rather than an unexplained dropout.
+                occluder = None
+                best = 1e9
+                for u in self.tracks:
+                    if u is t or u.hits < self.min_hits:
+                        continue
+                    d = ((u.centroid[0] - cx) ** 2 + (u.centroid[1] - cy) ** 2) ** 0.5
+                    if d < best:
+                        best, occluder = d, u.id
+                self.occluded.append(
+                    {"id": t.id, "x": cx, "y": cy, "w": w, "h": h,
+                     "frame_lost": self.frame, "clear": 0, "det": t.det,
+                     "occluder": occluder if best <= self.gate_px * 2 else None})
+                self.n_occluded += 1
+            elif t.hits >= self.min_hits:
+                self.n_exited += 1
+                died_edge += 1
             self.events.append(dict(frame=self.frame, event="death", id=t.id,
                                     x=f"{t.centroid[0]:.1f}",
                                     y=f"{t.centroid[1]:.1f}",
@@ -524,7 +697,66 @@ class StickyTracker(MultiTracker):
         self.ghosts = [g for g in self.ghosts
                        if self.frame - g[5] <= self.ghost_frames]
         self.pending = [q for q in self.pending if self.frame - q[3] <= 2]
+        if self.use_ledger:
+            self.ledger_update(born_edge, died_edge, 0)
         return self.tracks
+
+    def ledger_update(self, born_ids, died_edge, died_interior):
+        """
+        Count the room by what crossed its edge, not by what is visible.
+
+        A detector reports what it can see. An occupancy sensor is asked
+        something else: how many people are in the room. Those differ exactly
+        when someone is hidden, which is the case that matters. The boundary is
+        what makes the second question answerable — a person can only join the
+        room by crossing into frame and can only leave by crossing out.
+
+        So: births at the edge add, deaths at the edge subtract, and anything
+        that happens in the interior changes nothing. A person who crouches
+        behind a desk in the middle of the room never touches the ledger.
+
+        The failure mode of a ledger is drift: miss one exit and the count is
+        permanently high. Two guards. If more people are visible than the
+        ledger believes, the ledger is raised at once — seeing is stronger than
+        bookkeeping. And a surplus that is never corroborated decays after
+        --ledger-decay frames, logged, so a stuck count self-heals instead of
+        needing a restart.
+        """
+        self.n_entries += born_ids
+        self.n_exits += died_edge
+        self.ledger = max(0, self.n_entries - self.n_exits)
+
+        vis = len(self.confirmed())
+        if vis > self.ledger:
+            self.ledger = vis
+            self.n_entries = self.ledger + self.n_exits
+            self.surplus_since = self.frame
+        elif self.ledger > vis + len(self.occluded):
+            if self.frame - self.surplus_since > self.ledger_decay:
+                self.n_exits += 1
+                self.n_decayed += 1
+                self.surplus_since = self.frame
+                self.events.append(dict(
+                    frame=self.frame, event="decay", id="",
+                    x="", y="", cause="unverified surplus",
+                    near_track="", near_dist="", near_misses="",
+                    ghost_id="", ghost_dist="", ghost_age="",
+                    n_within_2gate="", n_dets="", n_tracks=len(self.tracks)))
+        else:
+            self.surplus_since = self.frame
+
+    def present(self):
+        """
+        Everyone in the room: visible plus known-but-hidden.
+
+        This is the number an occupancy sensor should report. Counting only
+        what is visible means a person sitting behind another reads as having
+        left, and reappears as an arrival — two errors in the log for an event
+        that never happened.
+        """
+        if self.use_ledger:
+            return max(self.ledger, len(self.confirmed()))
+        return len(self.confirmed()) + len(self.occluded)
 
 
 def omega_to_body(x, y, w, h, det=None):
@@ -703,6 +935,31 @@ def main():
                          "dead track reclaims its id instead of getting a new "
                          "one. 0 disables. Measured need: 3.8 px after a "
                          "33-frame absence.")
+    ap.add_argument("--exit-margin", type=float, default=12.0,
+                    help="px band around the frame edge. A track dying inside "
+                         "this band is treated as having WALKED OUT; one dying "
+                         "in the interior is treated as OCCLUDED, because "
+                         "people do not vanish from the middle of a room.")
+    ap.add_argument("--occl-timeout", type=int, default=350,
+                    help="frames an occluded person is remembered before the "
+                         "tracker gives up (~40 s at 8.7 fps)")
+    ap.add_argument("--occl-clear", type=int, default=6,
+                    help="CNN frames that must show empty space at their last "
+                         "position before an occluded person is dropped. This "
+                         "is the positive test that stops a wrong memory from "
+                         "inflating the count forever.")
+    ap.add_argument("--no-ledger", action="store_true",
+                    help="report only what is visible. The ledger counts the "
+                         "room by boundary crossings instead, which is what "
+                         "lets someone crouch behind furniture without the "
+                         "count dropping.")
+    ap.add_argument("--ledger-decay", type=int, default=600,
+                    help="frames an uncorroborated surplus survives before the "
+                         "ledger assumes it missed an exit (~70 s). Stops a "
+                         "single missed departure from inflating the count "
+                         "forever.")
+    ap.add_argument("--no-occlusion", action="store_true",
+                    help="disable occlusion memory entirely")
     ap.add_argument("--ghost-frames", type=int, default=45,
                     help="how long a dead track stays re-identifiable")
     ap.add_argument("--revive", type=float, default=1.8,
@@ -795,7 +1052,14 @@ def main():
     mt = StickyTracker(max_misses=args.max_misses, min_hits=args.min_hits,
                        gate_px=args.gate, revive_scale=args.revive,
                        ghost_frames=args.ghost_frames,
-                       dup_confirm=args.dup_confirm, reid_px=args.reid_px)
+                       dup_confirm=args.dup_confirm, reid_px=args.reid_px,
+                       exit_margin=args.exit_margin,
+                       occl_enabled=not args.no_occlusion,
+                       use_ledger=not args.no_ledger,
+                       ledger_decay=args.ledger_decay,
+                       occl_timeout=args.occl_timeout,
+                       occl_clear=args.occl_clear,
+                       frame_wh=(data.shape[1], data.shape[0]))
     S = max(2, args.scale)
     WIN = "FLUXNET  integrated"
     cv2.namedWindow(WIN, cv2.WINDOW_AUTOSIZE)
@@ -891,6 +1155,8 @@ def main():
                 dets = [body_to_omega(b) for b in blobs]
 
             mt.update(dets)
+            if not args.no_occlusion:
+                mt.resolve_occluded(dets, run_yolo)
             prev_conf_ids = {t.id for t in mt.tracks if t.hits >= args.min_hits}
             for t in mt.tracks:
                 trail.setdefault(t.id, []).append(t.centroid)
@@ -984,14 +1250,32 @@ def main():
                 cv2.putText(vis, sub, (bx0 + bs + 7, by0 + bs - 4), F, 0.38,
                             col if solid else C_DIM, 1, cv2.LINE_AA)
 
-        occ_hist.append(len(mt.confirmed()))
+        # occluded people: drawn where we last saw them, dashed and dim, so
+        # the count and the picture agree about who is in the room
+        for o in mt.occluded:
+            col = TRACK_COLS[o["id"] % len(TRACK_COLS)]
+            dim = tuple(int(c * 0.45) for c in col)
+            x0, y0 = int((o["x"] - o["w"] / 2) * S), int((o["y"] - o["h"] / 2) * S)
+            x1, y1 = int((o["x"] + o["w"] / 2) * S), int((o["y"] + o["h"] / 2) * S)
+            for xx in range(x0, x1, 8):
+                cv2.line(vis, (xx, y0), (min(xx + 4, x1), y0), dim, 1)
+                cv2.line(vis, (xx, y1), (min(xx + 4, x1), y1), dim, 1)
+            for yy in range(y0, y1, 8):
+                cv2.line(vis, (x0, yy), (x0, min(yy + 4, y1)), dim, 1)
+                cv2.line(vis, (x1, yy), (x1, min(yy + 4, y1)), dim, 1)
+            tag = f"{o['id']} hidden"
+            cv2.putText(vis, tag, (x0, max(10, y0 - 5)), F, 0.36, dim, 1,
+                        cv2.LINE_AA)
+
+        occ_hist.append(mt.present())
         if len(occ_hist) > 120:
             occ_hist.pop(0)
 
         if show_bar:
             H = vis.shape[0]
             bar = np.full((H, SIDEBAR_W, 3), C_BG, np.uint8)
-            conf_n = len(mt.confirmed())
+            conf_n = mt.present()
+            n_hidden = len(mt.occluded)
             duty = 100.0 * n_yolo / max(1, frame_i)
             W = SIDEBAR_W
 
@@ -1008,10 +1292,11 @@ def main():
             cv2.putText(bar, "OCCUPANCY", (28, 68), F, 0.38, C_FAINT, 1, cv2.LINE_AA)
             big = str(conf_n)
             cv2.putText(bar, big, (28, 118), F, 1.9, C_OK, 3, cv2.LINE_AA)
-            cv2.putText(bar, f"tracks {len(mt.tracks)}", (28 + _tw(big, 1.9) + 16, 100),
-                        F, 0.4, C_DIM, 1, cv2.LINE_AA)
-            cv2.putText(bar, f"blobs {'-' if pure else len(blobs)}",
-                        (28 + _tw(big, 1.9) + 16, 118), F, 0.4, C_DIM, 1, cv2.LINE_AA)
+            cv2.putText(bar, f"visible {len(mt.confirmed())}",
+                        (28 + _tw(big, 1.9) + 16, 100), F, 0.4, C_DIM, 1, cv2.LINE_AA)
+            cv2.putText(bar, f"hidden {n_hidden}",
+                        (28 + _tw(big, 1.9) + 16, 118), F, 0.4,
+                        C_WARN if n_hidden else C_DIM, 1, cv2.LINE_AA)
             spark(bar, W - 26 - 84, 58, 84, 24, occ_hist, C_OK,
                   vmax=max(2, max(occ_hist) if occ_hist else 2))
 
@@ -1051,6 +1336,12 @@ def main():
                 if fits(y): row(bar, y, "dups held", mt.n_suppressed); y += 20
                 if fits(y): row(bar, y, "ids reclaimed", mt.n_reid,
                                 vcol=C_OK if mt.n_reid else C_TEXT); y += 20
+                if fits(y): row(bar, y, "occluded", f"{mt.n_recovered}/{mt.n_occluded}",
+                                vcol=C_WARN if mt.occluded else C_TEXT); y += 20
+                if fits(y): row(bar, y, "exited", mt.n_exited); y += 20
+                if fits(y) and mt.use_ledger:
+                    row(bar, y, "ledger in/out",
+                        f"{mt.n_entries}/{mt.n_exits}"); y += 20
                 y += 8
             if fits(y): row(bar, y, "ambient",
                             f"{float(np.median(data)):.1f} C"); y += 20
@@ -1162,6 +1453,17 @@ def main():
     print(f"mean loop        {loop_ms:.0f} ms")
     print(f"log              {csv_path}")
     print(f"track events     {ev_path}")
+    print(f"\nocclusion")
+    print(f"  hidden events    {mt.n_occluded}")
+    print(f"  recovered        {mt.n_recovered}")
+    print(f"  gave up          {mt.n_gaveup}")
+    print(f"  edge exits       {mt.n_exited}")
+    if mt.use_ledger:
+        print(f"\nledger")
+        print(f"  entries          {mt.n_entries}")
+        print(f"  exits            {mt.n_exits}")
+        print(f"  decayed          {mt.n_decayed}  (surplus never corroborated)")
+        print(f"  learned hiding spots  {len(mt.occl_map)}")
     births = [e for e in mt.events if e["event"] == "birth"]
     if births:
         import collections as _c
