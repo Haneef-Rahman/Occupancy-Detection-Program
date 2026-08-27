@@ -60,8 +60,19 @@ Keys
     q / ESC   quit          space  pause        h  hide sidebar
     s         save frame    l      log to CSV
     y         force a YOLO frame now
-    b         toggle classical blob overlay (see what triggers a re-detect)
-    t         toggle track trails
+    b         classical blob overlay (what triggers a re-detect)
+    t         track trails
+    p         cycle box: body / omega / both
+    o         show/hide the CNN person boxes
+    d         dedup on/off
+    r         reset all track identities (do this after changing a parameter)
+
+    TAB       select a parameter
+    [ ]       decrease / increase it
+
+Live parameters: conf, gate px, dup confirm, reid px, coast trigger, merge m,
+dedup iou. Tuning while watching beats guessing from a table — and `r` clears
+the ids so the count you judge is not inherited from the previous setting.
 """
 
 import argparse
@@ -79,9 +90,37 @@ from tracker import MultiTracker, KalmanTrack
 
 
 SPAN_C = (15.0, 45.0)      # MUST match make_dataset.py — the model's encoding
-SIDEBAR_W = 330
+SIDEBAR_W = 340
 TRACK_COLS = [(90, 255, 120), (60, 220, 255), (255, 170, 90), (200, 130, 255),
               (120, 200, 255), (150, 255, 200), (255, 220, 120)]
+
+
+# Parameters adjustable while running. live_yolo.py had [ and ] for confidence
+# alone; here there are six things worth turning, so [ and ] act on whichever
+# one TAB has selected rather than each getting its own key.
+#
+#   name        attribute on args        step   min    max    fmt
+TUNABLES = [
+    ("conf",          "conf",           0.02,  0.05,  0.95,  "{:.2f}"),
+    ("gate px",       "gate",           2.0,   6.0,   80.0,  "{:.0f}"),
+    ("dup confirm",   "dup_confirm",    1,     1,     10,    "{:d}"),
+    ("reid px",       "reid_px",        5.0,   0.0,   80.0,  "{:.0f}"),
+    ("coast trig",    "coast_trigger",  1,     1,     8,     "{:d}"),
+    ("merge m",       "merge_dist",     0.25,  0.0,   5.0,   "{:.2f}"),
+    ("dedup iou",     "dedup_iou",      0.05,  0.0,   0.9,   "{:.2f}"),
+]
+
+
+def bump(args, idx, direction):
+    """Nudge the selected tunable and return a message for the console."""
+    name, attr, step, lo, hi, fmt = TUNABLES[idx]
+    cur = getattr(args, attr)
+    new = cur + direction * step
+    new = max(lo, min(hi, type(step)(new) if isinstance(step, int) else new))
+    if isinstance(step, int):
+        new = int(round(new))
+    setattr(args, attr, new)
+    return f"{name} = {fmt.format(new)}"
 
 
 def render_for_cnn(data):
@@ -672,6 +711,7 @@ def main():
     paused = logging_on = False
     show_bar, show_blobs, show_trails = True, False, True
     frame_i = saved = n_yolo = 0
+    sel = 0                          # which TUNABLE [ and ] act on
     force_yolo = True                 # first frame always seeds from the CNN
     last_cnn_frame = -999
     infer_ms = blob_ms = loop_ms = 0.0
@@ -871,8 +911,22 @@ def main():
                 put(y, "LOGGING", (80, 90, 255), 0.5, 2); y += 22
             if paused:
                 put(y, "PAUSED", (70, 190, 255), 0.5, 2)
-            cv2.putText(bar, "q  space  y yolo  b blobs  t trails  l log",
-                        (12, bar.shape[0] - 14), cv2.FONT_HERSHEY_SIMPLEX,
+            y = bar.shape[0] - 46 - 20 * len(TUNABLES)
+            put(y, "TUNE   TAB select   [ ] adjust", (150, 150, 165), 0.42)
+            y += 20
+            for i, (nm, attr, _st, _lo, _hi, fmt) in enumerate(TUNABLES):
+                on = i == sel
+                val = getattr(args, attr)
+                txt = f"{'>' if on else ' '} {nm:<12}{fmt.format(val):>7}"
+                cv2.putText(bar, txt, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                            (255, 220, 120) if on else (150, 150, 162),
+                            1, cv2.LINE_AA)
+                y += 20
+            cv2.putText(bar, "p box  o person  d dedup  r reset  s save",
+                        (12, bar.shape[0] - 22), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.36, (110, 110, 122), 1, cv2.LINE_AA)
+            cv2.putText(bar, "q quit  space pause  y yolo  b blobs  t trails",
+                        (12, bar.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX,
                         0.36, (110, 110, 122), 1, cv2.LINE_AA)
             vis = np.hstack([vis, bar])
 
@@ -890,6 +944,35 @@ def main():
             show_trails = not show_trails
         elif k == ord("y"):
             force_yolo = True
+        elif k == 9:                                    # TAB
+            sel = (sel + 1) % len(TUNABLES)
+            print(f"selected: {TUNABLES[sel][0]}")
+        elif k in (ord("["), ord("]")):
+            msg = bump(args, sel, -1 if k == ord("[") else 1)
+            # the tracker holds its own copies, so push the live values through
+            mt.gate_px = args.gate
+            mt.dup_confirm = args.dup_confirm
+            mt.reid_px = args.reid_px
+            print(msg)
+        elif k == ord("p"):
+            order = ("body", "omega", "both")
+            args.box = order[(order.index(args.box) + 1) % 3]
+            print(f"box = {args.box}")
+        elif k == ord("o"):
+            args.show_person = not args.show_person
+        elif k == ord("d"):
+            args.no_dedup = not args.no_dedup
+            print("dedup OFF" if args.no_dedup else "dedup ON")
+        elif k == ord("r"):
+            # Reset identities without restarting. Essential when tuning: after
+            # changing the gate you want a clean count, not ids inherited from
+            # the old settings.
+            mt.tracks.clear()
+            mt.ghosts.clear()
+            mt.pending.clear()
+            trail.clear()
+            KalmanTrack._next_id = 1
+            print("tracker reset")
         elif k == ord("l"):
             logging_on = not logging_on
             print("logging ON" if logging_on else "logging paused")
