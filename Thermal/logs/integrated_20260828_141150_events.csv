@@ -1,0 +1,2 @@
+frame,event,id,x,y,cause,near_track,near_dist,near_misses,ghost_id,ghost_dist,ghost_age,n_within_2gate,n_dets,n_tracks
+1,birth,1,115.9,27.9,genuine,,,,,,,0,1,1
