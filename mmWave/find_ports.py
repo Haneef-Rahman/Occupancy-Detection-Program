@@ -56,14 +56,28 @@ def probe_cli(dev, timeout=1.2):
     A bare newline makes the CLI reprint its prompt. Anything that replies
     with 'mmwDemo' is the config port. The data port stays silent or emits
     binary, so the test separates them without needing to send a real command.
+
+    TWO newlines. Opening a CP2105 asserts both handshake lines, which glitches
+    a garbage character onto the sensor's receive line. It sits in the demo's
+    line buffer until the next newline and then corrupts whatever real command
+    follows — so a careless probe here breaks the NEXT program to open the
+    port, not this one. The first newline flushes that fragment, the second
+    gets a clean prompt.
+
+    The handshake lines are deliberately left at their defaults. Holding them
+    low to avoid the glitch was tried and measured: the demo stops answering
+    entirely, because deasserted RTS means "do not transmit" to a device using
+    hardware flow control.
     """
     try:
         with serial.Serial(dev, 115200, timeout=timeout) as s:
-            s.reset_input_buffer()
-            s.write(b"\n")
-            s.flush()
-            time.sleep(0.4)
-            data = s.read(s.in_waiting or 64)
+            time.sleep(0.25)
+            for _ in range(2):
+                s.reset_input_buffer()
+                s.write(b"\n")
+                s.flush()
+                time.sleep(0.35)
+                data = s.read(s.in_waiting or 64)
         txt = data.decode("ascii", "ignore")
         return ("mmwDemo" in txt or ">" in txt), txt.strip()[:60]
     except Exception as e:
