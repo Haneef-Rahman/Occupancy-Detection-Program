@@ -108,11 +108,16 @@ def _diagnose_silence(raw):
     """
     if not raw:
         return ("nothing came back at all",
-                "The port opened but the demo is not running. After changing "
-                "the SOP jumpers back to functional mode the board must be "
-                "POWER-CYCLED — SOP is only sampled at reset, so flipping it "
-                "while powered leaves the ROM bootloader in charge and it "
-                "answers nothing. Unplug the USB, replug, try again.")
+                "The port opened but nothing is answering. In order of how "
+                "often it has actually been the cause on this board:\n"
+                "  1. Another program holds the port — TI's visualiser, or an "
+                "earlier run of this script. Quit it first.\n"
+                "  2. The demo is wedged. Once this device stops answering it "
+                "does not recover in band; UNPLUG the USB, wait five seconds, "
+                "replug. Not the reset button — full power removal.\n"
+                "  3. SOP still in flash mode. Only if you have just flashed: "
+                "SOP is sampled at reset, so changing it while powered leaves "
+                "the bootloader in charge and it answers nothing.")
     uniq = set(raw)
     if uniq <= {0x00} or uniq <= {0xFF}:
         return (f"{len(raw)} bytes, all 0x{raw[0]:02x}",
@@ -148,12 +153,15 @@ def open_cli(port, baud=115200, timeout=0.6, drop_handshake=False):
     back as '""udfeDataOutputMode'. Every open costs another byte, hence
     opening once here instead of probing on a second handle.
 
-    DO NOT "fix" that by deasserting DTR/RTS before opening. Measured on this
-    board: with the lines at their defaults the demo answers the prompt every
-    time; held low it goes completely silent, because deasserted RTS tells a
-    device using hardware flow control not to transmit. The glitch character
-    is harmless once clear_line() has flushed it, and that is the whole fix.
-    drop_handshake exists only for a board that actually needs it.
+    The handshake lines are left alone, but NOT for the reason first written
+    here. The original claim was that deasserting RTS silences the demo via
+    hardware flow control. Later measurement (power_cycle.py --identify)
+    disproved that: DTR low, RTS low, and both low each left the CLI answering
+    normally, and none produced a boot banner, so those lines are neither
+    flow control nor NRST on this EVM. The silence that prompted the theory
+    was a wedged board, which is what nearly every silence turned out to be.
+    They are left at their defaults now simply because nothing is gained by
+    touching them. drop_handshake remains for a board that needs it.
     """
     s = serial.Serial()
     s.port = port
@@ -168,6 +176,15 @@ def open_cli(port, baud=115200, timeout=0.6, drop_handshake=False):
     return s
 
 
+TRACE = False          # --trace: dump every byte in and out of the CLI
+
+
+def _t(direction, data, note=""):
+    if TRACE:
+        print(f"    [{direction}] {len(data):3d}B {data[:70]!r} {note}",
+              flush=True)
+
+
 def clear_line(s, settle=0.25):
     """
     Send a bare newline to terminate whatever partial line the sensor is
@@ -180,8 +197,12 @@ def clear_line(s, settle=0.25):
     s.reset_input_buffer()
     s.write(b"\n")
     s.flush()
+    _t("tx", b"\n", "(clear_line)")
     time.sleep(settle)
-    return s.read(s.in_waiting or 256)
+    n = s.in_waiting
+    raw = s.read(n or 256)
+    _t("rx", raw, f"(clear_line, in_waiting was {n})")
+    return raw
 
 
 def probe_cli(port, baud=115200):
@@ -204,13 +225,17 @@ def _read_reply(s, timeout=1.2):
     """
     end = time.monotonic() + timeout
     buf = b""
+    reads = 0
     while time.monotonic() < end:
-        chunk = s.read(s.in_waiting or 1)
+        n = s.in_waiting
+        chunk = s.read(n or 1)
+        reads += 1
         if chunk:
             buf += chunk
         txt = buf.decode("ascii", "ignore")
         if "mmwDemo" in txt or txt.rstrip().endswith(">"):
             break
+    _t("rx", buf, f"(_read_reply, {reads} read calls)")
     return buf
 
 
@@ -235,10 +260,19 @@ def reply_kind(raw):
         return "unknown"
     if "already stopped" in txt or "not running" in txt:
         return "ok"
+    if "Error" in txt:
+        return "error"
+    # Readable, but the demo never finished speaking: no verdict and no prompt.
+    # This is a TRUNCATED read, not a rejection, and the two need opposite
+    # responses. sensorStart runs boot calibration and can take many seconds;
+    # reporting its echo as "arguments refused" sent us hunting a config bug
+    # that did not exist.
+    if "mmwDemo" not in txt:
+        return "truncated"
     return "error"
 
 
-def _send_line(s, line, attempts=3):
+def _send_line(s, line, attempts=3, timeout=1.2):
     """
     Send one command, retrying only when the LINE failed, never when the
     command was understood and refused.
@@ -252,12 +286,53 @@ def _send_line(s, line, attempts=3):
     for k in range(attempts):
         s.write((line + "\n").encode())
         s.flush()
-        raw = _read_reply(s)
+        _t("tx", (line + "\n").encode(), f"(attempt {k})")
+        raw = _read_reply(s, timeout)
         kind = reply_kind(raw)
-        if kind in ("ok", "unknown", "error"):
+        if kind in ("ok", "unknown", "error", "truncated"):
             return kind, raw.decode("ascii", "ignore"), raw, k
         clear_line(s, 0.2)                 # garbage or silence: resynchronise
     return kind, raw.decode("ascii", "ignore"), raw, attempts - 1
+
+
+# Commands that do real work before answering. sensorStart runs boot
+# calibration; on a large radar cube that is several seconds, and timing it out
+# looks exactly like a rejected command.
+SLOW_COMMANDS = ("sensorStart", "sensorStop", "calibData")
+
+
+def reset_device(s, timeout=8.0, verbose=True):
+    """
+    Reboot the sensor over the CLI and wait for proof that it happened.
+
+    The flashed demo exposes 'resetDevice'. Measured on this board it really
+    does restart the processor -- it answers 'Resetting Device...' and then
+    reprints the boot banner, which is the only trustworthy evidence. A
+    responding prompt is not evidence: a board that never reset also responds.
+
+    This matters because a freshly booted sensor is the exact state a config
+    send wants -- unconfigured, stopped, and not gating its own UART. Doing it
+    here replaces the physical unplug for everything except a true wedge, where
+    the CLI is dead and this command cannot be delivered at all.
+    """
+    s.reset_input_buffer()
+    s.write(b"resetDevice\n")
+    s.flush()
+    _t("tx", b"resetDevice\n", "(reset_device)")
+    end = time.monotonic() + timeout
+    buf = b""
+    while time.monotonic() < end:
+        chunk = s.read(s.in_waiting or 1)
+        if chunk:
+            buf += chunk
+            if b"*****" in buf or b"Indoor people" in buf:
+                time.sleep(0.6)                 # let the banner finish arriving
+                extra = s.read(s.in_waiting or 0)
+                buf += extra
+                _t("rx", buf, "(reset_device, booted)")
+                return True, buf
+    _t("rx", buf, "(reset_device, no banner)")
+    return False, buf
 
 
 def stop_sensor(s, tries=6, verbose=True):
@@ -284,7 +359,7 @@ def stop_sensor(s, tries=6, verbose=True):
 
 
 def send_config(port, path, baud=115200, verbose=True, check=True,
-                drop_handshake=False):
+                drop_handshake=False, reset=True):
     """Push the profile down the CLI, one line at a time, checking each reply."""
     with open(path) as fh:
         lines = [l.strip() for l in fh]
@@ -293,13 +368,25 @@ def send_config(port, path, baud=115200, verbose=True, check=True,
     with open_cli(port, baud, drop_handshake=drop_handshake) as s:
         clear_line(s)                      # flush the open-glitch
 
-        # STOP BEFORE PROBING. A running low-power build garbles its own
-        # prompt, so checking for the prompt first diagnoses a perfectly good
-        # CLI as the wrong port. sensorStop is the one command worth pushing
-        # through the noise, because succeeding at it makes the noise stop.
-        stopped, _ = stop_sensor(s, verbose=verbose)
-        if verbose and stopped:
-            print("sensor stopped")
+        # REBOOT FIRST, if we can. A freshly booted sensor is unconfigured,
+        # stopped, and quiet, which removes the whole class of problems caused
+        # by configuring a running device. resetDevice needs a live CLI, so it
+        # is attempted and not depended on; if it fails we fall back to
+        # stopping the sensor the hard way.
+        #
+        # Stopping before probing for the prompt is deliberate either way: a
+        # running sensor garbles its own prompt, so checking first diagnoses a
+        # perfectly good CLI as the wrong port.
+        booted = False
+        if reset:
+            booted, _ = reset_device(s, verbose=verbose)
+            if verbose:
+                print("device rebooted" if booted else
+                      "resetDevice did not confirm a reboot; stopping instead")
+        if not booted:
+            stopped, _ = stop_sensor(s, verbose=verbose)
+            if verbose and stopped:
+                print("sensor stopped")
 
         raw = clear_line(s)                # now the prompt should be clean
         if check:
@@ -322,7 +409,9 @@ def send_config(port, path, baud=115200, verbose=True, check=True,
                     print(f"   {i:3d}/{len(lines)}  {line[:52]}  (done above)")
                 continue
 
-            kind, reply, raw, retries = _send_line(s, line)
+            slow = line.split()[0] in SLOW_COMMANDS
+            kind, reply, raw, retries = _send_line(
+                s, line, timeout=15.0 if slow else 1.2)
 
             if verbose:
                 mark = "  " if kind == "ok" else "!!"
@@ -336,7 +425,13 @@ def send_config(port, path, baud=115200, verbose=True, check=True,
             print(f"  reply: {reply.strip()!r}")
             print(f"  raw:   {raw[:48].hex(' ')}")
 
-            if kind in ("garbage", "silent"):
+            if kind == "truncated":
+                print("\nThat is NOT a rejection. The demo echoed the command "
+                      "and then said nothing more within the timeout — no "
+                      "'Done', no 'Error', no prompt. The command may well "
+                      "have succeeded and simply taken longer than we waited. "
+                      "Try --no-config and see whether frames are arriving.")
+            elif kind in ("garbage", "silent"):
                 print("\nThat is not a rejection — it is a UART framing fault. "
                       "The demo never received a readable command, so nothing "
                       "is wrong with your .cfg.")
@@ -559,10 +654,17 @@ def main():
     ap.add_argument("--drop-handshake", action="store_true",
                     help="deassert DTR/RTS on open; on this board that SILENCES "
                          "the demo, so only for hardware that needs it")
+    ap.add_argument("--no-reset", action="store_true",
+                    help="do not issue resetDevice before sending the profile")
+    ap.add_argument("--trace", action="store_true",
+                    help="dump every byte written to and read from the CLI")
     ap.add_argument("--no-check", action="store_true",
                     help="send the profile without first probing for the prompt")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+
+    global TRACE
+    TRACE = args.trace
 
     if not args.no_config:
         if not args.cfg:
@@ -572,7 +674,8 @@ def main():
         print(f"configuring from {args.cfg} ...")
         if not send_config(args.cli, args.cfg, args.cli_baud, not args.quiet,
                            check=not args.no_check,
-                           drop_handshake=args.drop_handshake):
+                           drop_handshake=args.drop_handshake,
+                           reset=not args.no_reset):
             sys.exit(1)
         print("configured; sensor started\n")
 
