@@ -15,6 +15,8 @@ privacy is a property of the physics rather than of a policy.
 | File | Purpose |
 |---|---|
 | `ti_track.py` | **Main tool.** Configure the sensor, decode frames with TI's own parser, print/save tracks. Headless. |
+| `adaptive.py` | Switch between a close-range and a long-range config at runtime, based on where targets actually are |
+| `gui_adaptive.py` | TI's Industrial Visualizer with that switching attached — no edits to TI's tree |
 | `stream.py` | Serial layer — config sender, reply classification, reset. Also a standalone reader with its own parser (superseded; see below). |
 | `find_ports.py` | Work out which half of the CP2105 is CLI and which is DATA |
 | `power_cycle.py` | Reset the sensor over the CLI instead of unplugging it |
@@ -163,6 +165,53 @@ in both configs. **Track survival is therefore the wrong metric for static
 retention**; the right one is points per frame on a stationary person. A proper
 test needs the sensor mounted as the config claims — `sensorPosition 2 0 15`,
 2 m up and tilted 15° down — with the subject 3–5 m out.
+
+---
+
+## Adaptive config switching
+
+No single profile is good at both close and long range, so `adaptive.py` runs
+the close-range one by default and switches when the scene calls for it:
+
+```
+CLOSE  AOP_6m_staticRetention   holds a person who sits still (99% occupied at desk range)
+FAR    AOP_9m_sensitive         12 m box, lower CFAR thresholds, finds weak distant targets
+
+CLOSE -> FAR   nearest target >= --near-min  AND  >= --far-count targets beyond --far-enter
+FAR -> CLOSE   nothing beyond --far-exit, or anything closer than --near-min
+```
+
+```bash
+python adaptive.py --replay logs/session.jsonl     # tune on recorded data first
+python adaptive.py --dry-run --save logs/dry.jsonl # decide and log, never switch
+python adaptive.py --save logs/adaptive.jsonl      # live
+python gui_adaptive.py --dry-run                   # same rule, inside TI's GUI
+```
+
+**A switch costs a measured ~1.8 s blackout and resets every track id.** Both
+are inherent to reconfiguring, and both are why the rule is debounced hard:
+separate enter/exit thresholds (6.0 / 5.0 m), the condition must hold 3 s
+continuously, and a 30 s minimum dwell. A test that hammers the threshold once
+a second for a minute produces zero switches; a genuine sustained crowd
+switches exactly once.
+
+The id reset is not a wrinkle to paper over. Every switch writes
+`{"event": "switch", ..., "note": "all radar track ids reset here"}` into the
+log, because identity has to live in the **fusion** layer — carried through the
+blackout by the thermal track, then re-associated by position when the radar
+comes back. Radar is poor at motionless people and thermal is excellent at
+them, so this division of labour is the right way round.
+
+`--near-min` exists because the 9 m profile's `staticBoundaryBox` starts at 2 m:
+measured at 0.65 m, the 9 m configs reported 0–15 % occupancy where the 6 m
+config reported 99 %. Switching to FAR while someone is that close trades a
+tracked person for a distant one.
+
+`gui_adaptive.py` wraps `Core.updateGraph` from outside rather than patching
+TI's source, so a toolbox reinstall cannot silently undo it. The switch is
+`parseTimer.stop()` → `parseCfg(path)` → `sendCfg()` — `parseCfg` rather than
+`selectCfg` because the latter opens a file dialog, and because `parseCfg` also
+refreshes the boundary-box drawing so the 3D view redraws the new room.
 
 ---
 
