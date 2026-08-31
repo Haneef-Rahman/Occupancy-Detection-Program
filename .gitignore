@@ -236,6 +236,14 @@ logs/frame_*.png
 !Thermal/datasets/*.npz
 !Thermal/datasets/*.csv
 
+# ---- FLUXNET: radar captures ----
+# ti_track.py writes one JSON object per frame at ~17 fps, so a two-minute run
+# is 2000 lines and they accumulate quickly. The configs ARE committed, since
+# a log is meaningless without the profile that produced it.
+mmWave/logs/*.jsonl
+mmWave/logs/*.csv
+mmWave/mmwave_view_*.png
+
 # third-party build dependency, not project code
 libuvc/
 **/libuvc/
