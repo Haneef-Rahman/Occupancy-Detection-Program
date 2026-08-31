@@ -70,6 +70,38 @@ comes from the config's `antGeometry0` / `antGeometry1` / `antPhaseRot` lines.
 Flash with UniFlash over the **Enhanced** COM port, SOP jumpers in flash mode,
 then SOP back to functional and **power-cycle** — SOP is sampled at reset.
 
+### Vital Signs with People Tracking
+
+A separate lab, and unlike People Tracking it ships a **device-specific** build:
+
+```
+Vital_Signs/Vital_Signs_With_People_Tracking/prebuilt_binaries/
+  vital_signs_tracking_6843AOP_demo.bin        # 633,988 bytes — take the AOP one
+```
+
+Demonstrated working (screenshot below): breathing and heart rate recovered
+from chest displacement, on top of the normal tracker. Constraints from TI's
+user guide and its configs, all of which matter:
+
+- **One person.** `trackingCfg 1 2 800 **1** 46 96 90` — `maxNumTracks` is 1,
+  against 30 in the People Tracking configs. This is a single-subject monitor,
+  not an occupancy counter.
+- **20 seconds of stillness**, seated or lying, sensor pointed at the chest,
+  **≤ 5 m**. Walking around produces nothing.
+- Runs at ~11 Hz (`frameCfg ... 90.00`) rather than 17.
+- `VSRangeIdxCfg 0 21` — the leading `0` disables fixed-range mode, so vitals
+  follow the tracker's position rather than a hard-coded bin. The `21` is inert.
+- The 2 m and 6 m configs differ **only** in their three boundary boxes;
+  identical chirp profile. "Range mode" here is a tracker box, not an RF
+  setting, and the profile's unambiguous range is ~8.1 m
+  (`c·Fs / 2·S` with `Fs = 10785` ksps, `S = 200` MHz/µs).
+
+Worth keeping in view for occupancy even though it counts only one person:
+**breathing is the ultimate static-presence signal.** Static retention is a
+heuristic patch on the motionless-occupant problem; chest displacement is direct
+physical evidence that a room is occupied, and someone asleep for six hours
+still breathes.
+
 Not usable on this board: the *Long Range People Detection* lab (50 m / 100 m).
 TI's guide specifies the IWR6843 **ISK**, its configs carry no `antGeometry`
 lines, and the beamforming variants need the MMWAVEICBOOST carrier. The AOP
@@ -207,6 +239,17 @@ initialiser.
 
 TI's own GUI is the reference implementation and worth having as an oracle.
 It runs natively on Apple Silicon via conda-forge:
+
+![TI Industrial Visualizer on macOS, Vital Signs with People Tracking](figures/ti_visualizer_vital_signs.png)
+
+*TI's Industrial Visualizer running natively on Apple Silicon — device
+`xWR6843`, ports typed as `/dev/cu.usbserial-*` paths because TI's auto-detect
+matches Windows driver descriptions and cannot fire on macOS. This is the
+**Vital Signs with People Tracking** lab: one target tracked in the 3D plot at
+left, and at right the chest-displacement waveform decomposed into breathing
+(blue, **10 breaths/min**) and heartbeat (red, **61.9 bpm**) from range bin 13.
+The radar measures sub-millimetre skin movement by phase, not by range —
+at 60 GHz, λ ≈ 5 mm, so a 0.5 mm heartbeat displacement is ~72° of phase.*
 
 ```bash
 brew install --cask miniforge

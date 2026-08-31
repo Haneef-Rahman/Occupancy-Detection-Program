@@ -22,7 +22,7 @@ from one.*
 | Sensor | State | Headline |
 |---|---|---|
 | **Thermal** | working, trained model deployed | classical **94.0 % recall / 96.9 % precision**; YOLO26n **mAP@50 0.991** |
-| **mmWave** | working, headless pipeline | 12 m tracking at 16.7 fps, on-chip tracker, no host DSP |
+| **mmWave** | working, headless pipeline | 12 m tracking at 16.7 fps, on-chip tracker, no host DSP; vital signs demonstrated (**10 breaths/min, 61.9 bpm**) |
 | **Depth** | not started | ST VL53L8CX / VL53L9CX |
 | **Fusion** | designed, not built | radar → thermal image plane, IoU confirmation |
 

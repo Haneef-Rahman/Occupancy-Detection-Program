@@ -328,7 +328,16 @@ re-detects on loss:
 ./run.sh integrated_launcher.py --weights models/v2/best.pt --mode yolo
 ```
 
-![Integrated launcher UI](figures/ui_sidebar.png)
+![Integrated launcher, live](figures/integrated_launcher_live.png)
+
+*Live capture. Three omega detections at **0.75 / 0.83 / 0.82** against a
+`conf 0.37` threshold, occupancy 3 with none hidden, **52 ms inference / 56 ms
+loop**, ambient 23.3 °C. Note the hot arc across the top of the frame — a
+ceiling fixture well outside the 27–36 °C plausibility band, and exactly the
+clutter the temperature gate exists to reject. Every tunable in the sidebar is
+adjustable live with TAB and `[` `]`.*
+
+![Integrated launcher UI detail](figures/ui_sidebar.png)
 
 Every parameter is live-tunable from the sidebar, and `--mode` switches between
 integrated tracking and pure YOLO detection. Track births are logged with the
