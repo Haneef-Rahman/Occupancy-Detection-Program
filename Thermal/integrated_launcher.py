@@ -1064,7 +1064,12 @@ def unmatched(blobs, tracks, gate):
     return out
 
 
-def main():
+def main(argv=None):
+    """
+    Entry point. `argv` makes this importable as a library: Fusion/fuse.py
+    drives it rather than duplicating the camera, the CNN, the tracker and the
+    UI. Passing None keeps the normal command-line behaviour.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", required=True)
     ap.add_argument("--conf", type=float, default=0.374,
@@ -1229,9 +1234,12 @@ def main():
                     action="store_false")
     ap.add_argument("--assist-alpha", type=float, default=0.6,
                     help="how much of the Kalman velocity comes from Doppler")
+    ap.add_argument("--no-thermal-veto", action="store_true",
+                    help="count radar-only tracks as people; by default "
+                         "thermal must confirm before anything counts")
     ap.add_argument("--radar-iou", type=float, default=0.15)
     ap.add_argument("--radar-centre-px", type=float, default=25.0)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     edges = set() if args.exit_edges.strip().lower() in ("none", "") else {
         e.strip().lower() for e in args.exit_edges.split(",") if e.strip()}
     bad = edges - {"left", "right", "top", "bottom"}
@@ -1334,7 +1342,8 @@ def main():
         rcam = _P.Camera(hfov_deg=args.radar_hfov)
         rext = _P.Extrinsics(tz=args.radar_tz, pitch=args.radar_pitch,
                              yaw=args.radar_yaw)
-        fusion = Fusion(rcam, args.radar_iou, args.radar_centre_px)
+        fusion = Fusion(rcam, args.radar_iou, args.radar_centre_px,
+                        thermal_veto=not args.no_thermal_veto)
         link = RadarLink(args.radar_cli, args.radar_data,
                          args.radar_close_cfg,
                          args.radar_far_cfg if args.radar_adaptive else None,

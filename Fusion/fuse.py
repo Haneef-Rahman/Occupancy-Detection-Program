@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 """
-Thermal + mmWave fusion: one identity per person, with 3D position and velocity.
+Thermal + mmWave fusion. This is the entry point for the whole pipeline.
 
     python fuse.py --self-test
-    python fuse.py --live --weights ../Thermal/models/v2/best.pt \
-                   --cfg ../mmWave/configs/AOP_6m_staticRetention.cfg
+    python fuse.py --live --adaptive
+    python fuse.py --live --pitch -2.0 --assist-alpha 0.4
+
+ASSEMBLED FROM LIBRARIES, not reimplemented:
+
+    integrated_launcher   camera, omega CNN, Kalman tracking, occlusion
+                          memory, re-identification, live tuning, the UI
+    Fusion.radar_link     radar thread, adaptive config switching
+    Fusion.fuse (here)    association and the thermal-authority protocol
+    mmWave.project        radar -> camera-plane geometry
+    mmWave.adaptive       the switching rule
+
+Anything this parser does not recognise is forwarded verbatim to
+integrated_launcher, so every flag that file accepts stays reachable.
 
 WHAT IT DOES. Radar tracks are projected into the Lepton's image plane, matched
 to the thermal YOLO boxes by IoU, and the two are bound to a single FUSED id
@@ -486,219 +498,124 @@ def self_test():
 # live
 # ---------------------------------------------------------------------------
 
-def live(args):
-    import threading
-    import numpy as np
-    import cv2
-    import thermal_detect as TD
-    from tracker import MultiTracker
-    from ultralytics import YOLO
-    import ti_track as T
-    import stream as S
-    import serial
+def live(args, extra):
+    """
+    Run the real pipeline by DELEGATING, not reimplementing.
 
-    cam = P.Camera(hfov_deg=args.hfov, k1=args.k1, k2=args.k2)
-    ext = P.Extrinsics(args.tx, args.ty, args.tz, args.yaw, args.pitch, args.roll)
-    fusion = Fusion(cam, args.iou_min, args.max_centre_px,
-                    ghost_frames=args.ghost_frames, ghost_move=args.ghost_move,
-                    thermal_veto=not args.no_thermal_veto, grace=args.grace)
+    An earlier version of this function opened its own camera, ran its own
+    YOLO call, built its own tracker and drew its own window. That duplicated
+    integrated_launcher.py badly: no occlusion memory, no re-identification,
+    no duplicate suppression, no live tuning, and a YOLO call that fed raw
+    temperatures to a model trained on a fixed 15-45 C span.
 
-    # ---- radar in its own thread; only the newest frame matters -----------
-    shared = {"tracks": [], "n": 0, "err": None}
-    lock = threading.Lock()
+    So the pipeline is assembled from libraries instead:
 
-    def radar_loop():
-        try:
-            parseFrame = T.load_ti_parser(T.find_ti_common(args.ti_common), False)
-            if args.cfg:
-                if not S.send_config(args.cli, args.cfg, 115200, verbose=False):
-                    shared["err"] = "config failed"
-                    return
-            buf = b""
-            with serial.Serial(args.data, args.baud, timeout=0.4) as s:
-                while not shared.get("stop"):
-                    chunk = s.read(4096)
-                    if chunk:
-                        buf += chunk
-                        if len(buf) > (1 << 20):
-                            buf = buf[-65536:]
-                    got, upto = T.frames_from(buf, parseFrame.parseStandardFrame)
-                    buf = buf[upto:]
-                    for f in got:
-                        rec = T.summarise(f)
-                        with lock:
-                            shared["tracks"] = rec["tracks"]
-                            shared["n"] += 1
-        except Exception as e:
-            shared["err"] = f"{type(e).__name__}: {e}"
+        integrated_launcher   camera, CNN, Kalman tracking, occlusion, the UI
+        Fusion.radar_link     radar thread, adaptive config switching
+        Fusion.fuse           association and the thermal-authority protocol
+        mmWave.project        radar -> camera-plane geometry
 
-    threading.Thread(target=radar_loop, daemon=True).start()
+    integrated_launcher.main() takes an argv, so this builds one and hands
+    over. Every flag that file accepts stays reachable: anything this parser
+    does not recognise is forwarded verbatim.
+    """
+    import integrated_launcher as IL
 
-    # The model was trained on a FIXED 15-45 C span, not on raw temperatures
-    # and not on an auto-gain image. Feeding it anything else silently degrades
-    # every detection, so the exact training encoding is imported from
-    # live_yolo rather than reimplemented here.
-    from live_yolo import render_for_cnn
+    argv = [
+        "--weights", args.weights,
+        "--mode", args.mode,
+        "--conf", str(args.conf),
+        "--radar",
+        "--radar-cli", args.cli,
+        "--radar-data", args.data,
+        "--radar-close-cfg", args.close_cfg,
+        "--radar-far-cfg", args.far_cfg,
+        "--radar-hfov", str(args.hfov),
+        "--radar-tz", str(args.tz),
+        "--radar-pitch", str(args.pitch),
+        "--radar-yaw", str(args.yaw),
+        "--radar-iou", str(args.iou_min),
+        "--radar-centre-px", str(args.max_centre_px),
+        "--assist-alpha", str(args.assist_alpha),
+    ]
+    if args.box:
+        argv += ["--box", args.box]
+    if args.adaptive:
+        argv += ["--radar-adaptive"]
+    if args.no_thermal_veto:
+        argv += ["--no-thermal-veto"]
+    if not args.arrow:
+        argv += ["--no-radar-arrow"]
+    if not args.vectors:
+        argv += ["--no-radar-vectors"]
+    if not args.velocity_assist:
+        argv += ["--no-velocity-assist"]
+    argv += extra
 
-    print(f"loading {args.weights}")
-    model = YOLO(args.weights)
-    try:
-        from lepton_libuvc import LeptonUVC
-        camera = LeptonUVC()
-        print("  libuvc: radiometric Y16")
-    except Exception as e:
-        print(f"  libuvc unavailable: {e}; falling back to OpenCV")
-        camera = TD.ThermalCamera(args.device or 0)
-
-    # read() returns (data, flag) -- DATA FIRST. Both camera classes agree on
-    # the order and disagree on what the flag means, so `data is None` is the
-    # only reliable failure test.
-    data, is_temp = camera.read()
-    if data is None:
-        sys.exit("no frame from the camera")
-    if not is_temp:
-        print("\n  WARNING: not radiometric. The model expects a fixed "
-              "15-45 C span;\n  an AGC image is a different encoding and "
-              "detections will be unreliable.\n")
-    thermal_tracker = MultiTracker(max_misses=6, min_hits=2, gate_px=28.0)
-
-    S_ = args.scale
-    win = "FLUXNET fusion"
-    cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
-    t0 = time.time()
-    n = 0
-
-    while True:
-        data, _flag = camera.read()
-        if data is None:
-            continue
-        n += 1
-
-        res = model.predict(render_for_cnn(data), verbose=False,
-                            conf=args.conf, imgsz=args.imgsz)[0]
-        dets = []
-        if len(res.boxes):
-            xyxy = res.boxes.xyxy.cpu().numpy()
-            cls = res.boxes.cls.cpu().numpy().astype(int)
-            for b, c in zip(xyxy, cls):
-                if c != args.cls:
-                    continue
-                x0, y0, x1, y1 = map(float, b)
-                dets.append({"bbox": (x0, y0, x1 - x0, y1 - y0),
-                             "centroid": ((x0 + x1) / 2, (y0 + y1) / 2)})
-        thermal_tracker.update(dets)
-        thermal_boxes = []
-        for tr in thermal_tracker.confirmed():
-            x, y, w, h = tr.bbox
-            thermal_boxes.append({"box": [x, y, x + w, y + h], "id": tr.id})
-
-        with lock:
-            rtracks = list(shared["tracks"])
-        # Every projected track is passed through, IN OR OUT of the camera's
-        # view. in_view is what lets the protocol distinguish "thermal said no"
-        # from "thermal never looked", so filtering here would destroy it.
-        radar_boxes = [b for b in
-                       (P.project_track(t, cam, ext, args.body_width)
-                        for t in rtracks) if b]
-
-        fused = fusion.step(radar_boxes, thermal_boxes)
-        people = fusion.people()
-
-        # ---- draw --------------------------------------------------------
-        vis = cv2.resize(TD.colorize(data), (data.shape[1] * S_, data.shape[0] * S_),
-                         interpolation=cv2.INTER_NEAREST)
-        for b in radar_boxes:
-            x1, y1, x2, y2 = [int(v * S_) for v in b["box"]]
-            cv2.rectangle(vis, (x1, y1), (x2, y2), (255, 190, 90), 1)
-        for t in thermal_boxes:
-            x1, y1, x2, y2 = [int(v * S_) for v in t["box"]]
-            cv2.rectangle(vis, (x1, y1), (x2, y2), (90, 230, 130), 1)
-        for f in fusion.rejected():
-            x1, y1, x2, y2 = [int(v * S_) for v in f.box]
-            cv2.rectangle(vis, (x1, y1), (x2, y2), (90, 90, 100), 1)
-            cv2.putText(vis, "not a person", (x1, max(10, y1 - 4)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.34, (90, 90, 100), 1)
-        for f in people:
-            x1, y1, x2, y2 = [int(v * S_) for v in f.box]
-            col = {CONFIRMED: (120, 255, 160), THERMAL_ONLY: (120, 200, 255),
-                   RADAR_ONLY: (255, 190, 90)}.get(f.state, (150, 150, 150))
-            cv2.rectangle(vis, (x1, y1), (x2, y2), col, 2)
-            lab = f"#{f.id} {f.state[:4]}"
-            if f.pos:
-                lab += f"  {f.range_m:.1f}m {f.speed():.1f}m/s"
-            cv2.putText(vis, lab, (x1, max(12, y1 - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, col, 1, cv2.LINE_AA)
-
-        hud = (f"PEOPLE {len(people)}   confirmed "
-               f"{sum(1 for f in people if f.state == CONFIRMED)}  "
-               f"thermal-only {sum(1 for f in people if f.state == THERMAL_ONLY)}"
-               f"   | rejected {len(fusion.rejected())}"
-               f"  unseen {len(fusion.unseen())}"
-               f"   radar {shared['n']}f  {n/max(1e-6,time.time()-t0):.1f} fps")
-        cv2.putText(vis, hud, (8, vis.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (220, 220, 230), 1, cv2.LINE_AA)
-        if shared["err"]:
-            cv2.putText(vis, f"RADAR: {shared['err']}", (8, 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (110, 130, 255), 1)
-
-        cv2.imshow(win, vis)
-        k = cv2.waitKey(1) & 0xFF
-        if k in (27, ord('q')):
-            break
-
-    shared["stop"] = True
-    cv2.destroyAllWindows()
+    print("FLUXNET fusion")
+    print(f"  thermal   {args.weights}  mode={args.mode}")
+    print(f"  radar     {os.path.basename(args.close_cfg)}"
+          + (f" <-> {os.path.basename(args.far_cfg)}" if args.adaptive else "")
+          + f"   adaptive={args.adaptive}")
+    print(f"  protocol  thermal is the authority on what is a person")
+    print(f"  motion    Doppler drives velocity (alpha {args.assist_alpha}), "
+          f"thermal keeps identity\n")
+    IL.main(argv)
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="FLUXNET thermal + mmWave fusion. Unrecognised arguments "
+                    "are forwarded to integrated_launcher.py.")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--live", action="store_true")
-    ap.add_argument("--weights", default="../Thermal/models/v2/best.pt")
-    ap.add_argument("--conf", type=float, default=0.374)
-    ap.add_argument("--imgsz", type=int, default=160)
-    ap.add_argument("--cls", type=int, default=1,
-                    help="thermal class to fuse: 1 = omega, 0 = person")
-    ap.add_argument("--device", type=int)
-    ap.add_argument("--scale", type=int, default=6)
 
-    ap.add_argument("--cfg", help="radar profile to send at startup")
+    ap.add_argument("--weights", default="../Thermal/models/v2/best.pt")
+    ap.add_argument("--mode", choices=("yolo", "hybrid"), default="yolo",
+                    help="yolo: omega CNN every frame, Kalman for identity "
+                         "only, no classical detection")
+    ap.add_argument("--box", choices=("body", "omega", "both"), default="omega")
+    ap.add_argument("--conf", type=float, default=0.374)
+
     ap.add_argument("--cli", default="/dev/cu.usbserial-010821020")
     ap.add_argument("--data", default="/dev/cu.usbserial-010821021")
-    ap.add_argument("--baud", type=int, default=921600)
-    ap.add_argument("--ti-common")
+    ap.add_argument("--close-cfg",
+                    default="../mmWave/configs/AOP_6m_staticRetention.cfg")
+    ap.add_argument("--far-cfg",
+                    default="../mmWave/configs/AOP_9m_sensitive.cfg")
+    ap.add_argument("--adaptive", action="store_true",
+                    help="switch radar configs at runtime by target geometry")
 
     ap.add_argument("--hfov", type=float, default=95.0)
-    ap.add_argument("--k1", type=float, default=0.0)
-    ap.add_argument("--k2", type=float, default=0.0)
-    ap.add_argument("--tx", type=float, default=0.0)
-    ap.add_argument("--ty", type=float, default=0.0)
     ap.add_argument("--tz", type=float, default=-0.08,
-                    help="camera offset above the radar in metres; negative "
-                         "because the Lepton is mounted BELOW the AOP")
+                    help="camera offset relative to the radar, metres "
+                         "(negative: the Lepton sits below the AOP)")
+    ap.add_argument("--pitch", type=float, default=0.0,
+                    help="nudge until projected boxes sit on the thermal ones")
     ap.add_argument("--yaw", type=float, default=0.0)
-    ap.add_argument("--pitch", type=float, default=0.0)
-    ap.add_argument("--roll", type=float, default=0.0)
-    ap.add_argument("--body-width", type=float, default=0.50)
 
     ap.add_argument("--iou-min", type=float, default=0.15)
     ap.add_argument("--max-centre-px", type=float, default=25.0)
+    ap.add_argument("--assist-alpha", type=float, default=0.6,
+                    help="how much of the Kalman velocity comes from Doppler")
+    ap.add_argument("--no-arrow", dest="arrow", action="store_false")
+    ap.add_argument("--no-vectors", dest="vectors", action="store_false")
+    ap.add_argument("--no-velocity-assist", dest="velocity_assist",
+                    action="store_false")
     ap.add_argument("--no-thermal-veto", action="store_true",
-                    help="count radar-only tracks as people (pre-protocol "
-                         "behaviour); by default thermal must confirm")
-    ap.add_argument("--grace", type=int, default=9,
-                    help="frames a previously confirmed track keeps the "
-                         "benefit of the doubt when thermal blinks")
-    ap.add_argument("--ghost-frames", type=int, default=60)
-    ap.add_argument("--ghost-move", type=float, default=0.6)
-    args = ap.parse_args()
+                    help="count radar-only tracks as people (pre-protocol)")
+    args, extra = ap.parse_known_args()
 
     if args.self_test:
         sys.exit(self_test())
     if args.live:
-        live(args)
+        for p in (args.weights, args.close_cfg):
+            if not os.path.exists(p):
+                sys.exit(f"missing: {p}")
+        live(args, extra)
     else:
-        sys.exit("need --self-test or --live")
+        ap.print_help()
+        sys.exit(0)
 
 
 if __name__ == "__main__":
