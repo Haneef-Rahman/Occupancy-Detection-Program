@@ -23,8 +23,8 @@ from one.*
 |---|---|---|
 | **Thermal** | working, trained model deployed | classical **94.0 % recall / 96.9 % precision**; YOLO26n **mAP@50 0.991** |
 | **mmWave** | working, headless pipeline | 12 m tracking at 16.7 fps, on-chip tracker, no host DSP; vital signs demonstrated (**10 breaths/min, 61.9 bpm**) |
+| **Fusion** | **working** | radar projected into the thermal frame, IoU association, one persistent identity per person with measured 3D position and velocity |
 | **Depth** | not started | ST VL53L8CX / VL53L9CX |
-| **Fusion** | designed, not built | radar → thermal image plane, IoU confirmation |
 
 ### Thermal
 
@@ -51,6 +51,25 @@ See [`mmWave/README.md`](mmWave/README.md), including a documented firmware
 constraint TI does not state anywhere: `fineMotionCfg` requires 48 chirp loops,
 not 96.
 
+### Fusion
+
+`Fusion/fuse.py` is the entry point for the whole system. It assembles the two
+sensors rather than reimplementing either: the thermal launcher supplies the
+camera, CNN, Kalman tracking and UI; `radar_link` supplies the radar thread and
+adaptive config switching; the fusion layer supplies association and the
+adjudication protocol.
+
+**Thermal is the authority on what is a person. Radar owns motion; thermal owns
+continuity.** Doppler velocity is blended into the thermal Kalman filter, which
+keeps owning identity — because both sensors' own IDs are short-lived handles
+that get reused, reset on reconfigure, and churn under occlusion.
+
+```bash
+cd Fusion && sudo ../Thermal/.venv/bin/python fuse.py --live --adaptive
+```
+
+See [`Fusion/README.md`](Fusion/README.md).
+
 ---
 
 ## Repository layout
@@ -59,9 +78,9 @@ not 96.
 |---|---|
 | `Thermal/` | FLIR Lepton 3.1R + PureThermal 3 — capture, annotation pipeline, classical + learned detection, tracking |
 | `mmWave/` | TI IWR6843AOPEVM — flashing, configuration, TLV decoding, logging |
+| `Fusion/` | cross-sensor association, the adjudication protocol, the fused entry point |
 | `docs/` | project-level figures |
 | _(planned)_ `Depth/` | ST VL53L8CX / VL53L9CX multizone depth |
-| _(planned)_ `Fusion/` | cross-sensor association, tracking, crossing counts |
 
 ## Hardware
 
@@ -90,11 +109,13 @@ warm-centroid propagation compensation (worse than nothing — p25 IoU 0.231 →
 labels, because a person seated at a desk *is* their own background), and a 9 m
 radar config with static retention (measurably worse than TI's stock).
 
-**Sensors that fail differently.** A radiator looks like a person to a bolometer
-forever, and is invisible to radar. Radar multipath ghosts have no thermal
-signature. Requiring spatial agreement between the two kills both classes of
-error with one test — which is the argument for fusion, and why it is planned as
-cross-sensor IoU rather than a bigger model on either sensor alone.
+**Sensors that fail differently.** All measured on this hardware: a radiator is
+a permanent thermal false positive and invisible to radar; an oscillating fan is
+a dense, high-SNR, unambiguously moving radar target with no thermal signature;
+and with static retention enabled the radar held four motionless "targets" —
+furniture — for 8-30 s each in a real workspace. The failure modes do not
+overlap, so requiring spatial agreement kills both classes with one test. It
+also lets each sensor run *more* sensitively than it safely could alone.
 
 ---
 
@@ -109,6 +130,9 @@ cd Thermal && ./run.sh live_yolo.py --weights models/v2/best.pt --conf 0.374
 
 # radar — headless tracking
 cd mmWave && ./.venv/bin/python ti_track.py --cfg configs/AOP_9m_default.cfg
+
+# both — fused, one identity per person, 3D position and velocity
+cd Fusion && sudo ../Thermal/.venv/bin/python fuse.py --live --adaptive
 ```
 
 Full setup, including the macOS libuvc recipe the thermal camera requires, is in

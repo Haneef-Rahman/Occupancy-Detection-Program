@@ -463,15 +463,31 @@ detection. Tune by watching the mask view (`r`).
 - **Seated stillness** — a motionless person is the hardest case, and the one
   the radar's static retention is meant to cover.
 
-## Planned: thermal ↔ radar fusion
+## Thermal ↔ radar fusion — built
 
-Project radar tracks into this camera's image plane and compute IoU against the
-YOLO omega box, then feed the radar's **measured** range and radial velocity
-into the Kalman filter instead of differencing noisy positions.
+`integrated_launcher.py` takes `--radar`, which projects mmWave tracks into this
+camera's frame, matches them to the omega boxes by IoU, and adds **measured**
+range and 3D velocity to each track. Doppler is blended into this file's Kalman
+filter at `--assist-alpha`, so the radar supplies motion while the filter keeps
+owning identity.
 
-Geometry, worked out but not yet built: `fx = 80/tan(47.5°) ≈ 73 px` at 95°
-HFOV, so 0.59°/px and a 1.7 m person is ~25 px tall at 5 m. IoU tolerates 2–3 px
-of misalignment, which sets a calibration budget of roughly 1.5–2° total. At 95°
-the lens needs real distortion coefficients — a plain pinhole model spends the
-entire budget on barrel distortion before any other error. See
-[`../mmWave/README.md`](../mmWave/README.md).
+```bash
+sudo ./.venv/bin/python integrated_launcher.py \
+  --weights models/v2/best.pt --mode yolo --box omega --radar --radar-adaptive
+```
+
+Or through the fused entry point, which sets sensible defaults and forwards
+anything it does not recognise to this file:
+
+```bash
+cd ../Fusion && sudo ../Thermal/.venv/bin/python fuse.py --live --adaptive
+```
+
+**Thermal is the authority on what is a person** — every track drawn here is
+already thermally confirmed, so the radar cannot add or remove anyone. What it
+adds is measurement: range in place of the GradFarF `ref_range·ref_h/h_px`
+estimate, velocity in place of differenced pixel positions.
+
+Calibrate by nudging `--radar-pitch` until the projected boxes sit on the
+thermal ones. See [`../Fusion/README.md`](../Fusion/README.md) for the protocol,
+the association error budget, and the open z-reference question.

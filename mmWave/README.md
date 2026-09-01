@@ -21,6 +21,7 @@ privacy is a property of the physics rather than of a policy.
 | `find_ports.py` | Work out which half of the CP2105 is CLI and which is DATA |
 | `power_cycle.py` | Reset the sensor over the CLI instead of unplugging it |
 | `cli_probe.py` | Minimal bisection tool: is the board silent, or is our code wrong? |
+| `project.py` | Project radar tracks into the thermal camera's image plane |
 | `viz.py` | Early hand-built 3D viewer. **Superseded** by TI's Industrial Visualizer. |
 | `configs/` | TI's stock chirp profiles plus two local hybrids |
 
@@ -337,7 +338,12 @@ Working: flashing, port identification, configuration with retry and reply
 classification, frame decoding via TI's parser, JSONL logging, scriptable
 reset, TI's visualizer on macOS.
 
+Fusion with the thermal camera is built: `project.py` puts radar tracks into
+the Lepton's image plane, and [`../Fusion/`](../Fusion/README.md) does the
+association, the adjudication protocol and the Doppler-into-Kalman assist.
+
 Not yet done: mounting at the geometry the configs assume; a static-retention
-test measured on points per frame rather than track survival; projection of
-radar tracks into the thermal image plane for cross-sensor IoU
-(see [`../Thermal/README.md`](../Thermal/README.md)); deployment to the Pi.
+test measured on points per frame rather than track survival; settling the
+z reference (the track centroid currently sits *below* the height TLV's
+`z_min`, so the two are in different frames); distortion coefficients for the
+95 deg lens; deployment to the Pi.
