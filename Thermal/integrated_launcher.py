@@ -1209,6 +1209,26 @@ def main():
                     help="nudge until the projected boxes sit on the thermal "
                          "ones; absorbs mount tilt and the z-reference offset")
     ap.add_argument("--radar-yaw", type=float, default=0.0)
+    ap.add_argument("--radar-vectors", action="store_true", default=True,
+                    help="print 3D position and velocity under each track")
+    ap.add_argument("--no-radar-vectors", dest="radar_vectors",
+                    action="store_false")
+    ap.add_argument("--radar-arrow", action="store_true", default=True,
+                    help="draw a motion arrow from the Doppler velocity")
+    ap.add_argument("--no-radar-arrow", dest="radar_arrow",
+                    action="store_false")
+    ap.add_argument("--arrow-secs", type=float, default=1.0,
+                    help="the arrow shows where the person reaches in this "
+                         "many seconds at their current velocity")
+    ap.add_argument("--arrow-min", type=float, default=0.15,
+                    help="m/s below which no arrow is drawn, so standing "
+                         "people do not twitch")
+    ap.add_argument("--radar-velocity-assist", action="store_true", default=True,
+                    help="feed Doppler velocity into the thermal Kalman filter")
+    ap.add_argument("--no-velocity-assist", dest="radar_velocity_assist",
+                    action="store_false")
+    ap.add_argument("--assist-alpha", type=float, default=0.6,
+                    help="how much of the Kalman velocity comes from Doppler")
     ap.add_argument("--radar-iou", type=float, default=0.15)
     ap.add_argument("--radar-centre-px", type=float, default=25.0)
     args = ap.parse_args()
@@ -1303,6 +1323,8 @@ def main():
     # pixel-height estimate, on whichever tracks it can match.
     link = fusion = rcam = rext = None
     radar_boxes, fused_by_thermal, radar_note = [], {}, ""
+    _prev_t = time.time()
+    _assist_n = 0
     if args.radar:
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                         "..", "Fusion"))
@@ -1419,6 +1441,37 @@ def main():
                 fused_by_thermal = {f.thermal_id: f for f in fusion.tracks
                                     if f.thermal_id is not None}
 
+                # ---- Doppler drives motion; thermal keeps identity --------
+                # The thermal Kalman infers velocity by differencing noisy
+                # pixel positions, which is what produced id churn in the
+                # first place. The radar MEASURES radial velocity directly.
+                # So the filter keeps owning continuity -- ids, births,
+                # re-identification -- and the radar supplies the motion.
+                #
+                # LATERAL ONLY, on purpose. Converting m/s to px/frame needs
+                # a range, and horizontal range is trustworthy while the z
+                # reference is still unresolved (centroid z sits BELOW the
+                # height TLV's z_min, so the two are in different frames).
+                # Assisting the vertical component with an axis we cannot yet
+                # interpret would inject a bias, not a measurement.
+                _now = time.time()
+                _dt = min(0.5, max(0.02, _now - _prev_t))
+                _prev_t = _now
+                if args.radar_velocity_assist:
+                    _byid = {t.id: t for t in mt.tracks}
+                    for _fz in fusion.tracks:
+                        if (_fz.thermal_id is None or _fz.vel is None
+                                or _fz.pos is None):
+                            continue
+                        _t = _byid.get(_fz.thermal_id)
+                        if _t is None or _t.misses:
+                            continue
+                        _Z = max(0.5, _fz.pos[1])
+                        _vu = _fz.vel[0] * rcam.fx / _Z * _dt   # px per frame
+                        _a = args.assist_alpha
+                        _t.x[2] = (1.0 - _a) * _t.x[2] + _a * _vu
+                        _assist_n += 1
+
             loop_ms = 1000 * (time.time() - t_loop)
             if logging_on:
                 wr.writerow([frame_i,
@@ -1504,11 +1557,17 @@ def main():
             tag = f"{t.id}"
             sub = (f"{cf:.2f}" if cf is not None and solid else
                    f"coast {t.misses}" if not solid else "")
-            # Measured range beats the GradFarF pixel-height estimate, so when
-            # the radar has this track its numbers replace the guess.
+            # The thermal confidence is the detector's own verdict and stays in
+            # the badge whatever the radar says -- it was briefly replaced by
+            # the range readout, which hid the number the veto protocol rests
+            # on. Radar output gets its own lines below the box instead.
             _f = fused_by_thermal.get(t.id)
-            if _f is not None and _f.range_m is not None:
-                sub = f"{_f.range_m:.1f}m {_f.speed():.1f}m/s"
+            _rlines = []
+            if _f is not None and _f.pos is not None:
+                px_, py_, pz_ = _f.pos
+                vx_, vy_, vz_ = _f.vel or (0.0, 0.0, 0.0)
+                _rlines.append(f"p {px_:+.1f} {py_:+.1f} {pz_:+.1f} m")
+                _rlines.append(f"v {vx_:+.1f} {vy_:+.1f} {vz_:+.1f} m/s")
             # id badge: a filled square reads at a glance and cannot be lost
             # against a bright thermal background the way thin text can
             bs = 17
@@ -1516,6 +1575,40 @@ def main():
             cv2.rectangle(vis, (bx0, by0), (bx0 + bs, by0 + bs), col, -1)
             cv2.putText(vis, tag, (bx0 + 6 - (2 if len(tag) > 1 else 0),
                                    by0 + bs - 4), F, 0.42, C_BG, 1, cv2.LINE_AA)
+            # ---- 3D position, velocity, and a motion arrow from Doppler ----
+            if _rlines and args.radar_vectors:
+                ly = p1[1] + 12
+                for txt in _rlines:
+                    tw_ = _tw(txt, 0.34) + 6
+                    cv2.rectangle(vis, (p0[0], ly - 10), (p0[0] + tw_, ly + 3),
+                                  (26, 24, 22), -1)
+                    cv2.putText(vis, txt, (p0[0] + 3, ly), F, 0.34, col, 1,
+                                cv2.LINE_AA)
+                    ly += 13
+
+            if _f is not None and _f.pos is not None and args.radar_arrow:
+                # Project the track and the point it reaches in --arrow-secs,
+                # then draw between them. Doing it in 3D rather than drawing a
+                # 2D arrow from vx,vy means depth motion foreshortens correctly:
+                # someone walking straight at the sensor gets a short arrow and
+                # a growing box, which is what is actually happening.
+                vx_, vy_, vz_ = _f.vel or (0.0, 0.0, 0.0)
+                spd = (vx_ * vx_ + vy_ * vy_) ** 0.5
+                if spd > args.arrow_min:
+                    k = args.arrow_secs
+                    a3 = _f.pos
+                    b3 = (a3[0] + vx_ * k, a3[1] + vy_ * k, a3[2] + vz_ * k)
+                    pa = rcam.project(*rext.to_camera(*a3))
+                    pb = rcam.project(*rext.to_camera(*b3))
+                    if pa and pb:
+                        pa = (int(pa[0] * S), int(pa[1] * S))
+                        pb = (int(pb[0] * S), int(pb[1] * S))
+                        if 4 < ((pb[0]-pa[0])**2 + (pb[1]-pa[1])**2) ** 0.5:
+                            cv2.arrowedLine(vis, pa, pb, C_BG, 5, cv2.LINE_AA,
+                                            tipLength=0.3)
+                            cv2.arrowedLine(vis, pa, pb, col, 2, cv2.LINE_AA,
+                                            tipLength=0.3)
+
             if sub:
                 sw = _tw(sub, 0.38) + 8
                 cv2.rectangle(vis, (bx0 + bs + 3, by0),
@@ -1628,6 +1721,9 @@ def main():
                     if fits(y) and fusion.unseen():
                         # outside the camera: not examined, not denied
                         row(bar, y, "unseen", len(fusion.unseen())); y += 20
+                    if fits(y) and args.radar_velocity_assist:
+                        row(bar, y, "vel assist", f"{args.assist_alpha:.1f}",
+                            vcol=C_OK if _assist_n else C_DIM); y += 20
                     if fits(y) and st["adaptive"]:
                         row(bar, y, "switches", st["switches"]); y += 20
                     if fits(y) and st["switching"]:
