@@ -1188,6 +1188,29 @@ def main():
     ap.add_argument("--device", type=int, default=None)
     ap.add_argument("--opencv", action="store_true")
     ap.add_argument("--note", default="")
+
+    # ---- mmWave fusion (optional) ---------------------------------------
+    ap.add_argument("--radar", action="store_true",
+                    help="fuse a TI IWR6843AOP: adds measured range and 3D "
+                         "velocity to each thermal track")
+    ap.add_argument("--radar-cli", default="/dev/cu.usbserial-010821020")
+    ap.add_argument("--radar-data", default="/dev/cu.usbserial-010821021")
+    ap.add_argument("--radar-close-cfg",
+                    default="../mmWave/configs/AOP_6m_staticRetention.cfg")
+    ap.add_argument("--radar-far-cfg",
+                    default="../mmWave/configs/AOP_9m_sensitive.cfg")
+    ap.add_argument("--radar-adaptive", action="store_true",
+                    help="switch between the close and far configs at runtime")
+    ap.add_argument("--radar-hfov", type=float, default=95.0)
+    ap.add_argument("--radar-tz", type=float, default=-0.08,
+                    help="camera offset relative to the radar, metres; "
+                         "negative because the Lepton sits BELOW the AOP")
+    ap.add_argument("--radar-pitch", type=float, default=0.0,
+                    help="nudge until the projected boxes sit on the thermal "
+                         "ones; absorbs mount tilt and the z-reference offset")
+    ap.add_argument("--radar-yaw", type=float, default=0.0)
+    ap.add_argument("--radar-iou", type=float, default=0.15)
+    ap.add_argument("--radar-centre-px", type=float, default=25.0)
     args = ap.parse_args()
     edges = set() if args.exit_edges.strip().lower() in ("none", "") else {
         e.strip().lower() for e in args.exit_edges.split(",") if e.strip()}
@@ -1272,6 +1295,31 @@ def main():
     print(f"exits: edges={sorted(edges) or 'none'}  zones={len(zones)}")
     print(f"\nlogging to {csv_path}")
     print("q quit  space pause  y force YOLO  b blobs  t trails  l log\n")
+
+    # ---- mmWave fusion -------------------------------------------------
+    # Thermal is the authority on what is a person: every track drawn here is
+    # already thermally confirmed, so the radar cannot add or remove anyone.
+    # What it adds is MEASURED range and 3D velocity, in place of the GradFarF
+    # pixel-height estimate, on whichever tracks it can match.
+    link = fusion = rcam = rext = None
+    radar_boxes, fused_by_thermal, radar_note = [], {}, ""
+    if args.radar:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "..", "Fusion"))
+        from radar_link import RadarLink
+        from fuse import Fusion
+        import project as _P
+        rcam = _P.Camera(hfov_deg=args.radar_hfov)
+        rext = _P.Extrinsics(tz=args.radar_tz, pitch=args.radar_pitch,
+                             yaw=args.radar_yaw)
+        fusion = Fusion(rcam, args.radar_iou, args.radar_centre_px)
+        link = RadarLink(args.radar_cli, args.radar_data,
+                         args.radar_close_cfg,
+                         args.radar_far_cfg if args.radar_adaptive else None,
+                         adaptive=args.radar_adaptive,
+                         on_event=lambda m: print(f"[radar] {m}", flush=True))
+        link.start()
+        print(f"[radar] linked, adaptive={args.radar_adaptive}")
 
     while True:
         if not paused:
@@ -1359,6 +1407,18 @@ def main():
                 if k not in live_ids:
                     del trail[k]
 
+            if link is not None:
+                radar_boxes = link.projected(rcam, rext)
+                tb = []
+                for t in mt.tracks:
+                    if t.hits < args.min_hits:
+                        continue
+                    bx, by, bw_, bh_ = t.bbox
+                    tb.append({"box": [bx, by, bx + bw_, by + bh_], "id": t.id})
+                fusion.step(radar_boxes, tb)
+                fused_by_thermal = {f.thermal_id: f for f in fusion.tracks
+                                    if f.thermal_id is not None}
+
             loop_ms = 1000 * (time.time() - t_loop)
             if logging_on:
                 wr.writerow([frame_i,
@@ -1444,6 +1504,11 @@ def main():
             tag = f"{t.id}"
             sub = (f"{cf:.2f}" if cf is not None and solid else
                    f"coast {t.misses}" if not solid else "")
+            # Measured range beats the GradFarF pixel-height estimate, so when
+            # the radar has this track its numbers replace the guess.
+            _f = fused_by_thermal.get(t.id)
+            if _f is not None and _f.range_m is not None:
+                sub = f"{_f.range_m:.1f}m {_f.speed():.1f}m/s"
             # id badge: a filled square reads at a glance and cannot be lost
             # against a bright thermal background the way thin text can
             bs = 17
@@ -1536,6 +1601,37 @@ def main():
                 if fits(y) and not pure:
                     row(bar, y, "saved/frame", f"{saved_ms:.0f} ms", vcol=C_OK)
                     y += 20
+                y += 8
+
+            if link is not None and fits(y, 44):
+                st = link.status()
+                head(bar, y, "RADAR"); y += 24
+                if st["err"]:
+                    row(bar, y, "error", st["err"][:18], vcol=C_BAD); y += 20
+                else:
+                    mcol = C_ACCENT if st["mode"] == "close" else C_WARN
+                    row(bar, y, "mode", st["mode"], vcol=mcol); y += 20
+                    if fits(y):
+                        stale = st["stale_s"]
+                        scol = (C_BAD if stale is None or stale > 2 else C_OK)
+                        row(bar, y, "targets", st["n"], vcol=scol); y += 20
+                    if fits(y):
+                        row(bar, y, "matched",
+                            f"{len(fusion.last['matches'])}/{len(radar_boxes)}",
+                            vcol=C_OK if fusion.last["matches"] else C_TEXT)
+                        y += 20
+                    if fits(y):
+                        # radar targets thermal looked at and did not vouch for
+                        row(bar, y, "rejected", len(fusion.rejected()),
+                            vcol=C_WARN if fusion.rejected() else C_TEXT)
+                        y += 20
+                    if fits(y) and fusion.unseen():
+                        # outside the camera: not examined, not denied
+                        row(bar, y, "unseen", len(fusion.unseen())); y += 20
+                    if fits(y) and st["adaptive"]:
+                        row(bar, y, "switches", st["switches"]); y += 20
+                    if fits(y) and st["switching"]:
+                        row(bar, y, "reconfig", "...", vcol=C_WARN); y += 20
                 y += 8
 
             if fits(y, 44):
