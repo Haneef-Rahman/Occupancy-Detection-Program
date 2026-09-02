@@ -1195,6 +1195,23 @@ def main(argv=None):
     ap.add_argument("--note", default="")
 
     # ---- mmWave fusion (optional) ---------------------------------------
+    # ---- IR window compensation -----------------------------------------
+    ap.add_argument("--window", action="store_true",
+                    help="compensate for an IR window in front of the lens "
+                         "(Poly FIR 200 0.2 mm transmits ~67.5%%). Toggle live "
+                         "with 'w'.")
+    ap.add_argument("--window-tau", type=float, default=0.675,
+                    help="window transmission in the 8-14 um band")
+    ap.add_argument("--window-flat",
+                    help="flat-field calibration .npz from --window-calibrate")
+    ap.add_argument("--window-calibrate", metavar="OUT.npz",
+                    help="capture 32 frames of a UNIFORM scene, build the "
+                         "enclosure-glow field, save it and exit")
+    ap.add_argument("--no-window-temporal", dest="window_temporal",
+                    action="store_false")
+    ap.add_argument("--no-window-spatial", dest="window_spatial",
+                    action="store_false")
+
     ap.add_argument("--radar", action="store_true",
                     help="fuse a TI IWR6843AOP: adds measured range and 3D "
                          "velocity to each thermal track")
@@ -1324,6 +1341,33 @@ def main(argv=None):
     print(f"\nlogging to {csv_path}")
     print("q quit  space pause  y force YOLO  b blobs  t trails  l log\n")
 
+    # ---- IR window compensation -----------------------------------------
+    from window import WindowCorrection
+    _flat = None
+    if args.window_flat:
+        _flat = np.load(args.window_flat)["flat"]
+        print(f"window: flat field from {args.window_flat}")
+    win = WindowCorrection(tau=args.window_tau, enabled=args.window,
+                           temporal=args.window_temporal,
+                           spatial=args.window_spatial, flat=_flat)
+    if args.window_calibrate:
+        print("window calibration: point the ENCLOSED sensor at a blank, "
+              "thermally even surface.\n  capturing 32 frames ...")
+        buf = []
+        while len(buf) < 32:
+            d, _ = cam.read()
+            if d is not None:
+                buf.append(d)
+                print(f"\r  {len(buf)}/32", end="", flush=True)
+        field = WindowCorrection.calibrate(buf)
+        np.savez_compressed(args.window_calibrate, flat=field,
+                            tau=args.window_tau, netd=0.05)
+        print(f"\n  saved {args.window_calibrate}   "
+              f"glow span {float(field.max()-field.min()):.2f} C")
+        return
+    if args.window:
+        print(f"window: ON  {win.status()}")
+
     # ---- mmWave fusion -------------------------------------------------
     # Thermal is the authority on what is a person: every track drawn here is
     # already thermally confirmed, so the radar cannot add or remove anyone.
@@ -1357,6 +1401,10 @@ def main(argv=None):
             data, is_temp = cam.read()
             if data is None:
                 continue
+            # Applied here, before the CNN, the classical stage and the
+            # display, so every consumer sees the same corrected frame and the
+            # live toggle is a true A/B rather than a partial one.
+            data = win.apply(data)
             frame_i += 1
             t_loop = time.time()
 
@@ -1705,6 +1753,11 @@ def main(argv=None):
                     y += 20
                 y += 8
 
+            if args.window and fits(y):
+                row(bar, y, "window",
+                    win.status() if win.enabled else "off",
+                    vcol=C_OK if win.enabled else C_DIM); y += 20
+
             if link is not None and fits(y, 44):
                 st = link.status()
                 head(bar, y, "RADAR"); y += 24
@@ -1803,6 +1856,9 @@ def main(argv=None):
             show_blobs = not show_blobs
         elif k == ord("e"):
             show_exits = not show_exits
+        elif k == ord("w"):
+            win.enabled = not win.enabled
+            win.reset()
         elif k == ord("t"):
             show_trails = not show_trails
         elif k == ord("y"):
