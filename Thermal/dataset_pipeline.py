@@ -13,8 +13,9 @@ over the local one. Anything written under sudo is chowned back to you.
 
     1  pick capture logs          you choose, by index
     2  merge                      one working directory, provenance kept
-    3  triage                     sim 0.03, max-cluster 15 (tight)
+    3  triage                     sim 0.03, max-cluster 5
     4  annotate                   omega only, every cluster
+                                  --live hands this to annotate_live.py
     5  verify                     YOLO @ 0.29 audits PROPAGATED boxes only
     6  review                     worst-IoU first
     7  prune + build              cluster-level random split
@@ -70,7 +71,31 @@ OMEGA_CLASS = 1
 OMEGA_COL = (60, 220, 255)
 
 TRIAGE_SIM = 0.03          # default 0.10 — tighter, so propagation drifts less
-TRIAGE_MAX_CLUSTER = 15    # default 30
+TRIAGE_MAX_CLUSTER = 5     # default 30
+
+# Minimum IoU for a PROPAGATED box to snap to a YOLO box on the same frame.
+# 0.0 means ANY contact is enough; a strictly zero overlap never matches.
+#
+# WHY CONTACT AND NOT A REAL THRESHOLD. Inside a tight cluster the frames are
+# near-identical, so a propagated box lands close to the right place but not
+# exactly on it. Against a small omega — 15 px — a few pixels of drift drops
+# IoU below 0.5 while the two boxes are plainly the same head. Requiring 0.5
+# meant the drifted copy was kept precisely in the cases the snap existed for.
+#
+# THE RISK THIS ACCEPTS. At zero threshold a propagated box that merely grazes
+# a spurious detection can adopt it. cap_000463 has five omega boxes for two
+# or three people, one of them on wall clutter. The mitigation is that the
+# match is the HIGHEST-IoU intersecting box, not the first: a graze loses to a
+# real overlap. Raise --dedup-iou if over-detection starts winning anyway.
+#
+# WHICH FRAMES THIS TOUCHES, AND WHICH IT NEVER DOES. Cluster members only.
+# The representative is what Haneef drew and is written verbatim — an earlier
+# version applied this at the representative and destroyed correct boxes,
+# because "compare the human box to the model" and "overwrite a hand-annotated
+# frame" are the same operation there. A member's box is not his work: it is a
+# copy of his box shifted by a correlation estimate that nobody has looked at.
+# Asking the model about THAT is the same thing stage 5 does.
+DEDUP_IOU = 0.0
 VERIFY_CONF = 0.29
 VERIFY_IOU = 0.30          # a YOLO detection must overlap this much to vouch
 
@@ -434,7 +459,8 @@ class Pad:
         return None, None
 
 
-def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55):
+def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
+                   dedup_iou=DEDUP_IOU):
     """
     One representative frame per cluster, omega class only.
 
@@ -494,12 +520,19 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55):
 
     i = 0
     deleted = set()
+    snapped_total = 0
     while 0 <= i < len(clusters):
         cid = clusters[i]
         members = by_cluster[cid]
         rep = members[0]
         arr = np.load(os.path.join(root, "npy", rep["file"] + ".npy"))
         H, W = arr.shape[:2]
+
+        # The model's boxes for this frame, kept separately from the pad so a
+        # box you edit can still be compared against what the model said.
+        mp = os.path.join(root, "labels", rep["file"] + ".txt")
+        seed_boxes = ([b for b in an.load_labels(mp, W, H)
+                       if b[0] == OMEGA_CLASS] if os.path.exists(mp) else [])
 
         hp = os.path.join(human_dir, rep["file"] + ".txt")
         if os.path.exists(hp):
@@ -508,10 +541,8 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55):
         else:
             # Seed from the YOLO silver label so you are correcting, not
             # starting from nothing. Class 0 is dropped on the way in.
-            mp = os.path.join(root, "labels", rep["file"] + ".txt")
-            pad.boxes = ([b for b in an.load_labels(mp, W, H)
-                          if b[0] == OMEGA_CLASS]
-                         if os.path.exists(mp) else [])
+            pad.boxes = list(seed_boxes)
+        pad.first = None
 
         S = scale
         while True:
@@ -574,8 +605,11 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55):
             k = cv2.waitKey(20) & 0xFF
 
             if k in (13, 10, ord("n")):
-                commit(an, root, human_dir, members, pad.boxes, arr, H, W,
-                       max_shift, min_corr)
+                # pad.boxes verbatim to the representative; members get
+                # propagated and then snapped to YOLO.
+                _, n = commit(an, root, human_dir, members, pad.boxes, arr,
+                              H, W, max_shift, min_corr, dedup_iou)
+                snapped_total += n
                 i += 1
                 break
             if k == ord("b"):
@@ -593,7 +627,7 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55):
                 pad.first = None
             if k == ord("x"):
                 commit(an, root, human_dir, members, [], arr, H, W,
-                       max_shift, min_corr)
+                       max_shift, min_corr, dedup_iou)
                 i += 1
                 break
             # No 'k' (keep) key, deliberately. annotate.py needs one because it
@@ -614,11 +648,63 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55):
 
     cv2.destroyAllWindows()
     print(f"\nhuman labels -> {human_dir}")
+    if snapped_total:
+        print(f"snapped to YOLO geometry: {snapped_total} propagated boxes "
+              f"(IoU >= {dedup_iou}). Representatives untouched.")
     return deleted
 
 
+def snap_to_yolo(propagated, yolo, thresh=DEDUP_IOU):
+    """
+    Replace a propagated box with the YOLO box describing the same object.
+
+    A propagated box is your box from the representative, translated by a
+    normalised-correlation estimate. On the member frame the model has its own,
+    independently derived detection of that head. Where the two agree on WHICH
+    object they mean, the model's box is the better estimate of WHERE it is on
+    this particular frame — it looked at this frame; the propagated copy only
+    inferred it.
+
+    THE TRAP. Building the result as "all YOLO boxes, plus propagated boxes
+    that matched nothing" RESURRECTS every false positive you deleted at the
+    representative. You delete a radiator once; YOLO still finds it on all four
+    members, and it has no propagated counterpart — indistinguishable from a
+    box you never touched. Worse than at the representative, because one
+    deletion silently comes back N times.
+
+    So the result is built from the PROPAGATED list, never YOLO's:
+
+        matched   -> emit YOLO's box   (better geometry, same object)
+        unmatched -> emit the propagated box
+
+    A YOLO box matching nothing propagated is something you removed. It is
+    never emitted.
+
+    Returns (boxes, n_snapped).
+    """
+    out, snapped, used = [], 0, set()
+    for pb in propagated:
+        best, best_i = 0.0, None
+        for i, yb in enumerate(yolo):
+            if i in used:
+                continue
+            v = iou((pb[1], pb[2], pb[3], pb[4]), (yb[1], yb[2], yb[3], yb[4]))
+            if v > best:
+                best, best_i = v, i
+        # `best > 0` is separate from the threshold on purpose: at thresh 0.0
+        # the rule is CONTACT, and two boxes that do not touch have IoU exactly
+        # 0.0, which would otherwise satisfy `>= 0.0` and match everything.
+        if best_i is not None and best > 0.0 and best >= thresh:
+            out.append(yolo[best_i])
+            used.add(best_i)
+            snapped += 1
+        else:
+            out.append(pb)
+    return out, snapped
+
+
 def commit(an, root, human_dir, members, boxes, ref_arr, H, W,
-           max_shift, min_corr):
+           max_shift, min_corr, dedup_iou=DEDUP_IOU):
     """
     Write the representative, then propagate to the rest of the cluster.
 
@@ -640,9 +726,12 @@ def commit(an, root, human_dir, members, boxes, ref_arr, H, W,
     clustering working. An earlier version of this docstring called all of them
     refusals and made a 66% success rate look like a 66% failure rate.
     """
+    # THE REPRESENTATIVE, VERBATIM. Written before anything else and never
+    # passed through snap_to_yolo. What you drew is what is stored.
     rep = members[0]
     an.save_labels(os.path.join(human_dir, rep["file"] + ".txt"), boxes, W, H)
-    unshifted = 0
+
+    unshifted = snapped = 0
     for m in members[1:]:
         tgt = np.load(os.path.join(root, "npy", m["file"] + ".npy"))
         moved = []
@@ -656,9 +745,19 @@ def commit(an, root, human_dir, members, boxes, ref_arr, H, W,
                 unshifted += 1
             else:
                 moved.append(r[0])
+
+        # Members only: swap each propagated copy for the model's own detection
+        # of the same object ON THIS FRAME, where they agree it is the same
+        # object. Deletions are preserved — see snap_to_yolo.
+        mp = os.path.join(root, "labels", m["file"] + ".txt")
+        ylabels = ([b for b in an.load_labels(mp, W, H) if b[0] == OMEGA_CLASS]
+                   if os.path.exists(mp) else [])
+        moved, n = snap_to_yolo(moved, ylabels, dedup_iou)
+        snapped += n
+
         an.save_labels(os.path.join(human_dir, m["file"] + ".txt"),
                        moved, W, H)
-    return unshifted
+    return unshifted, snapped
 
 
 # ---------------------------------------------------------------------------
@@ -849,8 +948,23 @@ def main():
                     help="held-out fraction. Omitted: you are asked.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None, help="dataset output directory")
-    ap.add_argument("--review-frames", action="store_true",
-                    help="review every frame rather than one per cluster")
+    ap.add_argument("--live", action="store_true",
+                    help="stage 4: use annotate_live.py — hover a person and "
+                         "the model proposes the box, click to accept. No "
+                         "corner drawing, so a person the model cannot see at "
+                         "any confidence cannot be labelled; mark those "
+                         "clusters 'd' and redo them without --live.")
+    ap.add_argument("--live-conf", type=float, default=0.29,
+                    help="with --live, the starting confidence gate. [ and ] "
+                         "move it during annotation.")
+    ap.add_argument("--dedup-iou", type=float, default=DEDUP_IOU,
+                    help="IoU at which a PROPAGATED box is replaced by the "
+                         "YOLO box on that frame. 0 disables snapping. "
+                         "Never applies to representatives.")
+    ap.add_argument("--review-clusters", action="store_true",
+                    help="review one frame per cluster instead of every frame. "
+                         "Faster, but a propagated box is then never looked at "
+                         "on the frame it actually landed on.")
     args = ap.parse_args()
 
     weights = args.weights or latest_weights()
@@ -889,8 +1003,28 @@ def main():
 
     # ---- 4 annotate ------------------------------------------------------
     if args.start <= 4:
-        print("\n" + "=" * 60 + "\nSTAGE 4  annotate (omega only)\n" + "=" * 60)
-        annotate_omega(root, scale=args.scale)
+        mode = "live, model-in-the-loop" if args.live else "corner drawing"
+        print("\n" + "=" * 60 +
+              f"\nSTAGE 4  annotate (omega only — {mode})\n" + "=" * 60)
+        if args.live:
+            # Subprocess, not an import: annotate_live.py imports THIS module
+            # for commit()/snap_to_yolo()/Pad, so importing it back would be a
+            # cycle. A subprocess also means a crash in the experimental tool
+            # cannot take the pipeline down mid-run.
+            cmd = [sys.executable, "annotate_live.py", root,
+                   "--scale", args.scale,
+                   "--conf", args.live_conf,
+                   "--dedup-iou", args.dedup_iou,
+                   "--max-shift", 16.0, "--min-corr", 0.55]
+            if args.weights:
+                cmd += ["--weights", args.weights]
+            if run(cmd) != 0:
+                print("\nannotate_live.py exited non-zero. Stopping here so "
+                      "you can inspect labels_human/ rather than pressing on "
+                      "into verification with a half-annotated set.")
+                return
+        else:
+            annotate_omega(root, scale=args.scale, dedup_iou=args.dedup_iou)
         hand_back(root)      # annotation is long; don't leave it root-owned
 
     # ---- 5 verify --------------------------------------------------------
@@ -911,7 +1045,13 @@ def main():
         print("Ordered worst-first: frames with a warm blob and no box sort "
               "ahead of everything, then ascending box-vs-blob IoU.")
         cmd = [sys.executable, "review.py", root, "--scale", args.scale]
-        if args.review_frames:
+        if not args.review_clusters:
+            # EVERY frame, not one per cluster. review.py defaults to showing a
+            # cluster's worst frame as its proxy, which is the right economy
+            # when a cluster is a verbatim copy. It is the wrong economy here:
+            # compensation SHIFTS each propagated box independently, so the
+            # frames differ from one another and a box can be wrong on frame 11
+            # while the cluster's proxy frame looks fine.
             cmd.append("--frames")
         run(cmd)
 
