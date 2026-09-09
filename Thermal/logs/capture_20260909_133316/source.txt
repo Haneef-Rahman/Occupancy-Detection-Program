@@ -1,0 +1,6 @@
+recorder   dataset_recording.py
+weights    models/v2/best.pt
+conf       0.37
+classes    omega only (class 1); no person boxes
+started    2026-09-09T13:33:16
+note       
