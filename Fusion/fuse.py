@@ -70,6 +70,7 @@ sys.path.insert(0, os.path.join(ROOT, "mmWave"))
 sys.path.insert(0, os.path.join(ROOT, "Thermal"))
 
 import project as P                                     # noqa: E402
+from model_registry import resolve_weights          # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +571,9 @@ def main():
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--live", action="store_true")
 
-    ap.add_argument("--weights", default="../Thermal/models/v2/best.pt")
+    ap.add_argument("--weights", default=None,
+                    help="path to best.pt. Default: newest "
+                         "Thermal/models/vN/best.pt")
     ap.add_argument("--mode", choices=("yolo", "hybrid"), default="yolo",
                     help="yolo: omega CNN every frame, Kalman for identity "
                          "only, no classical detection")
@@ -609,6 +612,9 @@ def main():
     if args.self_test:
         sys.exit(self_test())
     if args.live:
+        # Resolve before the preflight check: args.weights is None when the
+        # user wants "newest", and os.path.exists(None) raises TypeError.
+        args.weights = resolve_weights(args.weights)
         for p in (args.weights, args.close_cfg):
             if not os.path.exists(p):
                 sys.exit(f"missing: {p}")

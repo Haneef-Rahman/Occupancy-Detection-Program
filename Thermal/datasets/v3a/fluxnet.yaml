@@ -1,0 +1,7 @@
+path: /Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/datasets/v3a
+train: train/images
+val: val/images
+
+names:
+  0: person   # dropped: not labelled in every source
+  1: omega

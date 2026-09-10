@@ -8,8 +8,8 @@ for simply watching the model work: half the screen and most of the failure
 modes belong to a detector you are not testing. This drops the classical path,
 the truth-typing and the scoring, and shows one panel.
 
-    ./run.sh live_yolo.py --weights models/v2/best.pt
-    ./run.sh live_yolo.py --weights models/v2/best.pt --conf 0.374 --scale 6
+    ./run.sh live_yolo.py                              # newest model
+    ./run.sh live_yolo.py --conf 0.374 --scale 6
 
 ENCODING. The image handed to the model is built with the same fixed 15-45 C
 span make_dataset.py used, NOT the per-frame percentile stretch that looks nicer
@@ -45,6 +45,7 @@ import cv2
 import numpy as np
 
 import thermal_detect as TD
+from model_registry import resolve_weights
 
 
 SPAN_C = (15.0, 45.0)     # MUST match make_dataset.py and thermal_detect.PNG_SPAN_C
@@ -85,7 +86,8 @@ def label(img, text, x, y, col, above=True):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--weights", required=True, help="path to best.pt")
+    ap.add_argument("--weights", default=None,
+                    help="path to best.pt. Default: newest models/vN")
     ap.add_argument("--conf", type=float, default=0.374,
                     help="confidence threshold. 0.374 is where F1 peaked for "
                          "the v2 model; the curve is flat from 0.10 to 0.80 so "
@@ -100,9 +102,7 @@ def main():
     args = ap.parse_args()
 
     from ultralytics import YOLO
-    print(f"loading {args.weights} ...")
-    if not os.path.exists(args.weights):
-        sys.exit(f"no such file: {args.weights}")
+    args.weights = resolve_weights(args.weights)
     model = YOLO(args.weights)
     names = getattr(model, "names", None) or {}
     print(f"  classes: {names}")

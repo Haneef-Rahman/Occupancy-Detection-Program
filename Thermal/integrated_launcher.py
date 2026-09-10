@@ -53,8 +53,8 @@ read for its height, which feeds the range model, and is not drawn unless you
 ask with --show-person. The box drawn for a track defaults to whatever that
 mode actually measured: omega in yolo mode, full body in hybrid.
 
-    ./run.sh integrated_launcher.py --weights models/v2/best.pt
-    ./run.sh integrated_launcher.py --weights models/v2/best.pt --mode yolo
+    ./run.sh integrated_launcher.py                    # newest model
+    ./run.sh integrated_launcher.py --mode yolo
 
 Keys
     q / ESC   quit          space  pause        h  hide sidebar
@@ -87,6 +87,7 @@ import numpy as np
 
 import thermal_detect as TD
 from tracker import MultiTracker, KalmanTrack
+from model_registry import resolve_weights
 
 
 SPAN_C = (15.0, 45.0)      # MUST match make_dataset.py — the model's encoding
@@ -1071,7 +1072,9 @@ def main(argv=None):
     UI. Passing None keeps the normal command-line behaviour.
     """
     ap = argparse.ArgumentParser()
-    ap.add_argument("--weights", required=True)
+    ap.add_argument("--weights", default=None,
+                    help="path to best.pt. Default: newest "
+                         "models/vN/best.pt (see model_registry.py)")
     ap.add_argument("--conf", type=float, default=0.374,
                     help="peak-F1 threshold measured for the v2 model")
     ap.add_argument("--imgsz", type=int, default=640)
@@ -1282,9 +1285,10 @@ def main(argv=None):
         args.box = "omega" if pure else "body"
 
     from ultralytics import YOLO
-    if not os.path.exists(args.weights):
-        sys.exit(f"no such file: {args.weights}")
-    print(f"loading {args.weights} ...")
+    # Resolve ONCE and reuse. resolve_weights already checks existence and
+    # exits with a useful message, so the old os.path.exists guard is gone —
+    # it ran before resolution and choked on the None that now means "newest".
+    args.weights = resolve_weights(args.weights)
     model = YOLO(args.weights)
 
     cam = open_camera(args)

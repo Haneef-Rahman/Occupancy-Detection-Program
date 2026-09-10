@@ -4,7 +4,7 @@ Record a capture log with YOLO omega labels and nothing else.
 
     python3 dataset_recording.py                 # latest model, conf 0.37
     python3 dataset_recording.py --conf 0.40
-    python3 dataset_recording.py --weights models/v2/best.pt
+    python3 dataset_recording.py --weights models/v1/best.pt   # pin an old one
 
     r        start / stop recording
     q, ESC   quit
@@ -46,33 +46,13 @@ import cv2
 import numpy as np
 
 import thermal_detect as TD
+from model_registry import latest_weights, resolve_weights
 
 SPAN_C = (15.0, 45.0)     # MUST match make_dataset.py and thermal_detect.PNG_SPAN_C
 OMEGA_CLASS = 1           # index in classes.txt — do not change
 LOG_DIR = "logs"
 
 BOX_COL = (60, 220, 255)  # same yellow annotate.py and review.py use for omega
-
-
-# ---------------------------------------------------------------------------
-# Model discovery
-# ---------------------------------------------------------------------------
-def latest_weights(models_dir="models"):
-    """
-    Highest-numbered models/vN/best.pt.
-
-    Sorted numerically, not lexically: v10 must beat v9, and a string sort puts
-    "v10" before "v9". There is only v1 and v2 today, which is exactly when this
-    kind of bug gets written and not noticed.
-    """
-    cands = []
-    for p in glob.glob(os.path.join(models_dir, "v*", "best.pt")):
-        m = re.search(r"v(\d+)", os.path.basename(os.path.dirname(p)))
-        if m:
-            cands.append((int(m.group(1)), p))
-    if not cands:
-        return None
-    return max(cands)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -260,11 +240,7 @@ def main():
     ap.add_argument("--note", default="")
     args = ap.parse_args()
 
-    weights = args.weights or latest_weights()
-    if not weights or not os.path.exists(weights):
-        sys.exit("no weights found — pass --weights, or put a model at "
-                 "models/vN/best.pt")
-    print(f"model: {weights}")
+    weights = resolve_weights(args.weights)
 
     from ultralytics import YOLO
     model = YOLO(weights)

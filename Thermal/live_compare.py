@@ -14,7 +14,7 @@ run on the same frame, and you type the true occupancy with the number keys.
 Every frame is logged with three numbers — truth, classical, CNN — and the
 summary at exit scores BOTH against truth, not against each other.
 
-    ./run.sh live_compare.py --weights best.pt --view horizontal
+    ./run.sh live_compare.py --view horizontal        # newest model
 
 Keys
     0-9   set the TRUE number of people in view (stays until you change it)
@@ -38,6 +38,7 @@ import cv2
 import numpy as np
 
 import thermal_detect as TD
+from model_registry import resolve_weights
 
 
 PANEL_W = 300
@@ -74,7 +75,8 @@ def open_camera(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--weights", required=True, help="path to best.pt")
+    ap.add_argument("--weights", default=None,
+                    help="path to best.pt. Default: newest models/vN")
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--view", default="horizontal", choices=TD.VIEW_MODES)
     ap.add_argument("--cohesion", type=int, default=1)
@@ -91,7 +93,7 @@ def main():
     args = ap.parse_args()
 
     from ultralytics import YOLO
-    print(f"loading {args.weights} ...")
+    args.weights = resolve_weights(args.weights)
     model = YOLO(args.weights)
 
     cam = open_camera(args)

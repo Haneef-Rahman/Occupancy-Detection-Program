@@ -61,6 +61,7 @@ import cv2
 import numpy as np
 
 import thermal_detect as TD
+from model_registry import latest_weights, resolve_weights  # noqa: F401
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(HERE, "logs")
@@ -123,15 +124,6 @@ def load_module(name):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-def latest_weights():
-    cands = []
-    for p in glob.glob(os.path.join(HERE, "models", "v*", "best.pt")):
-        m = re.search(r"v(\d+)", os.path.basename(os.path.dirname(p)))
-        if m:
-            cands.append((int(m.group(1)), p))
-    return max(cands)[1] if cands else None
 
 
 def run(cmd, cwd=HERE):
@@ -893,6 +885,50 @@ def verify_propagated(root, weights, conf=VERIFY_CONF, min_iou=VERIFY_IOU,
 # ---------------------------------------------------------------------------
 # 7. Split + build
 # ---------------------------------------------------------------------------
+def apply_to_delete(root):
+    """
+    Bridge review.py's verdict to prune.py's mechanism. They do not share one.
+
+    THE BUG THIS FIXES. review.py records rejections as stems in to_delete.txt
+    and explicitly does not remove anything. prune.py takes review/ as the KEEP
+    list and drops `npy - review`, i.e. it expects you to have deleted the QA
+    PNGs by hand. Run back to back, review marks 679 frames and prune reports
+    "to drop: 0 frames (0.0%)" — no error, no warning, and a dataset built from
+    every frame you just rejected.
+
+    That is what happened to merged_20260910_021320: 679 deletions marked,
+    1854 frames in the dataset.
+
+    Deleting the review/ PNG for each rejected stem is the missing step. It
+    uses prune.py's own contract rather than working around it, so prune stays
+    the one thing that removes npy/png/labels.
+
+    Returns the number of frames now queued for pruning.
+    """
+    td = os.path.join(root, "to_delete.txt")
+    rev = os.path.join(root, "review")
+    if not os.path.exists(td):
+        return 0
+    if not os.path.isdir(rev):
+        print(f"  to_delete.txt has entries but there is no review/ — "
+              f"prune.py cannot act. Skipping.")
+        return 0
+
+    stems = [ln.strip() for ln in open(td) if ln.strip()]
+    gone = 0
+    for s in stems:
+        p = os.path.join(rev, s + ".png")
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+                gone += 1
+            except OSError as e:
+                print(f"  could not remove {p}: {e}")
+    print(f"  to_delete.txt: {len(stems)} rejected, {gone} review/ entries "
+          f"removed -> prune.py will now see them")
+    return gone
+
+
 def build(root, out, val_fraction, seed):
     """
     Cluster-level random split.
@@ -967,9 +1003,7 @@ def main():
                          "on the frame it actually landed on.")
     args = ap.parse_args()
 
-    weights = args.weights or latest_weights()
-    if not weights:
-        sys.exit("no model at models/vN/best.pt — pass --weights")
+    weights = resolve_weights(args.weights)
 
     root = args.root or load_state()
     if args.start > 2 and not root:
@@ -1058,9 +1092,19 @@ def main():
     # ---- 7 prune + build -------------------------------------------------
     if args.start <= 7:
         print("\n" + "=" * 60 + "\nSTAGE 7  prune + build\n" + "=" * 60)
+        apply_to_delete(root)
         run([sys.executable, "prune.py", root])
         if input("apply prune? [y/N]: ").strip().lower() in ("y", "yes"):
             run([sys.executable, "prune.py", root, "--apply"])
+        else:
+            # Saying no here means the rejected frames stay in the dataset.
+            # That is a legitimate choice, but not a quiet one.
+            n = sum(1 for ln in open(os.path.join(root, "to_delete.txt"))
+                    if ln.strip()) if os.path.exists(
+                        os.path.join(root, "to_delete.txt")) else 0
+            if n:
+                print(f"\n  NOT pruned. {n} frames you rejected in review will "
+                      f"be included in the dataset.")
 
         vf = args.val_fraction
         if vf is None:

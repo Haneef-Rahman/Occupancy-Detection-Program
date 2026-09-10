@@ -1,0 +1,8 @@
+merged by merge_datasets.py
+
+v2  train 2722  val 680  from datasets/v2
+v3  train 938  val 237  from datasets/v3
+
+classes kept    [1]
+classes dropped [0]
+splits preserved from sources; not reshuffled
