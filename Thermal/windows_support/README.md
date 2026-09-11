@@ -10,7 +10,7 @@ never need to touch anything outside this folder.
 
 ```powershell
 cd Thermal\windows_support
-.\setup.ps1                                              # once
+.\setup.ps1                                              # once, ~2 min
 .\record.ps1 -Operator adrian -Note "cafeteria, 1430, 26C"
 .\check.ps1                                              # before sending
 ```
@@ -54,7 +54,7 @@ a room at 14 °C.
 So there are two guards, and please don't skip them:
 
 - **`backend_probe.py`** (run by `setup.ps1`) tells you before you start.
-- **`record_win.py` refuses to record** if it can't get a radiometric stream.
+- **the recorder refuses to start** if it can't get a radiometric stream.
 
 If it refuses, don't force it — send Haneef the probe output.
 
@@ -67,17 +67,27 @@ If it refuses, don't force it — send Haneef the probe output.
 | `setup.ps1` | one-time: creates the environment, installs numpy + opencv, checks the camera |
 | `record.ps1` | records a session |
 | `check.ps1` | verifies captures before you send them |
+| `preview.ps1` | live preview / tracker |
 | `backend_probe.py` | finds which camera backend gives real temperatures |
-| `record_win.py` | the recorder (Windows camera handling + provenance) |
-| `verify_capture.py` | the checker |
+| `verify_capture.py` | checks a capture is sound before you send it |
+| `win_common.py` | shared Windows plumbing — camera, provenance, the geteuid fix |
+| `w_dataset_recording.py` | the recorder |
+| `w_live_yolo.py` | live preview with detections (needs a model) |
+| `w_integrated_launcher.py` | full tracker (needs a model) |
+| `w_dataset_pipeline.py` | build a dataset from captures (you probably won't need it) |
 | `requirements-win.txt` | numpy and opencv, nothing else |
 
 No PyTorch, no ultralytics, no CUDA. Recording doesn't need them, and leaving
 them out turns a 2 GB install into a 60-second one.
 
-**Nothing in the parent folder is modified.** `record_win.py` imports the Mac
-recorder and swaps out two functions at runtime, so Haneef's setup can't be
-broken by anything here.
+**Nothing in the parent folder is modified.** Every `w_*.py` imports the real
+tool from `Thermal\` and swaps out only what's Unix-specific — the camera
+opener, and `os.geteuid` which doesn't exist on Windows at all. No logic is
+copied. Haneef's setup can't be broken from here, and any fix he makes upstream
+arrives for free.
+
+**Captures still land in `Thermal\logs\`**, exactly where the Mac writes them
+and where the dataset pipeline looks. Nothing here writes to its own folder.
 
 ---
 
