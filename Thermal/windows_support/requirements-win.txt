@@ -1,0 +1,14 @@
+# Recording only — deliberately minimal.
+#
+# No torch, no ultralytics. record_win.py runs YOLO only if a model is present
+# in ../models/, and Adrian is collecting data rather than training. Leaving
+# them out keeps this a 60-second install instead of a 2 GB one, and sidesteps
+# the CPU-vs-CUDA torch confusion completely.
+#
+# If you DO want live detection overlay while recording, add:
+#   torch --index-url https://download.pytorch.org/whl/cu128
+#   ultralytics==8.4.125
+# and copy a model into ../models/v3/best.pt
+
+numpy>=1.24
+opencv-python>=4.8
