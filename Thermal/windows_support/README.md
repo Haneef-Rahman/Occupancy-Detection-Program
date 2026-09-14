@@ -21,9 +21,58 @@ In the recording window: **`r`** starts and stops recording, **`q`** quits.
 
 ---
 
+## First time: test it in five steps
+
+None of this has ever run on a real Windows machine — it was written on a Mac
+against the docs. So please walk these in order rather than going straight out
+to collect. Total time about ten minutes, and it fails cheaply at a desk
+instead of expensively in hour two of a session.
+
+**1. Self test — no camera needed.**
+```powershell
+.\selftest.ps1
+```
+Ten checks: imports, paths, the patches, and writing then re-reading a capture
+using a fake camera that emits synthetic temperatures. If anything fails, stop
+and send Haneef the output. Nothing here needs the Lepton.
+
+**2. Camera probe — Lepton plugged in.**
+```powershell
+py -3.12 backend_probe.py
+```
+This answers the one question the self test cannot: does your Lepton hand
+OpenCV real temperatures? You want a line ending `<== USE THIS`. If nothing
+does, **stop** and send the output — do not record.
+
+**3. Look at the image.**
+```powershell
+.\preview.ps1
+```
+Skip this if you haven't got a model — it needs ultralytics. Otherwise: point
+it at yourself, check you're a bright blob, check the aim.
+
+**4. A thirty-second capture, then verify it.**
+```powershell
+.\record.ps1 -Operator adrian -Note "desk test, 1500, ambient 24C"
+.\check.ps1
+```
+Press `r`, wave at it for thirty seconds, press `r` again, then `q`. The check
+should say `OK`. Look at the ambient it reports — if it says 24 °C and your
+room is 24 °C, the whole chain is working.
+
+**5. Send Haneef that one capture before doing anything longer.**
+
+This is the step worth not skipping. He'll merge it with the Mac data and
+confirm it lines up. If your Lepton reads half a degree off his, or the render
+is subtly different, it shows up in one small file rather than after you've
+collected four hours across six buildings.
+
+---
+
 ## What you're actually collecting
 
-A Lepton 3.1R gives a 160×120 grid of **temperatures**, not a picture. We record
+A Lepton 3.1R gives a 160×120 grid of **temperatures** (160×122 if telemetry
+is enabled — the two extra rows are stripped on read), not a picture. We record
 the raw temperature array per frame, and the project uses them to detect the
 head-and-shoulders outline of a person — never a face, never anything
 identifiable. That's the whole point of FLUXNET: privacy comes from the physics,
@@ -65,9 +114,11 @@ If it refuses, don't force it — send Haneef the probe output.
 | file | what it does |
 |---|---|
 | `setup.ps1` | one-time: creates the environment, installs numpy + opencv, checks the camera |
+| `selftest.ps1` | proves everything works without a camera — run this first |
 | `record.ps1` | records a session |
 | `check.ps1` | verifies captures before you send them |
 | `preview.ps1` | live preview / tracker |
+| `selftest.py` | the ten checks |
 | `backend_probe.py` | finds which camera backend gives real temperatures |
 | `verify_capture.py` | checks a capture is sound before you send it |
 | `win_common.py` | shared Windows plumbing — camera, provenance, the geteuid fix |
@@ -149,6 +200,12 @@ Settings → Apps → Advanced app settings → App execution aliases → turn *
 **Camera opens but no frames / probe finds nothing**
 Something else has it. Windows gives exclusive access — close Teams, OBS, the
 FLIR app, any browser tab that ever asked for a camera. Then unplug and replug.
+
+**Frames are 160x122, or temperatures like -273 C / +344 C appear**
+That is telemetry: your Lepton has it enabled, so it sends two extra rows of
+status data per frame. Nothing to change — the camera is asked what size it is
+already set to and those rows are stripped before anything interprets the
+frame. `source.txt` records that it happened. Found by you, 2026-09-14.
 
 **"No radiometric stream found"**
 Don't use `-AllowAgc` to get past it unless Haneef says so. That flag exists for

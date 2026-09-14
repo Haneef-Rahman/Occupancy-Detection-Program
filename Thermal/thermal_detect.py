@@ -84,6 +84,49 @@ DEFAULT_FLAGS = {name: dflt for _, name, _, dflt in TOGGLES}
 
 # ----------------------------------------------------------------------------
 LEPTON_W, LEPTON_H = 160, 120
+
+# Telemetry adds rows to every frame. A Lepton with telemetry enabled sends
+# 160x122, not 160x120 — two extra rows of housekeeping (focal-plane
+# temperature, shutter state, frame counter) that are NOT image.
+#
+# Found on Adrian's board, 2026-09-14. Two ways it hurts, and the second is
+# the dangerous one:
+#   - as temperatures those rows decode to about -273 C and +344 C, which
+#     wrecks any ambient estimate taken as a frame median;
+#   - the arrays are a different SHAPE from everyone else's, so captures look
+#     fine on disk and fail only when merged.
+#
+# Telemetry can sit at the TOP (header) or the BOTTOM (footer) depending on
+# how the module is configured, so nothing here assumes which end.
+TELEMETRY_ROWS = 2
+
+
+def strip_telemetry(frame, expect_h=LEPTON_H):
+    """
+    Remove Lepton telemetry rows from whichever end they are on.
+
+    Returns (image_rows, n_stripped). A frame that is already the right height
+    passes through untouched, so this is safe to call unconditionally.
+
+    HOW IT DECIDES WHICH END. Not by assuming footer — Lepton supports header
+    mode too, and guessing wrong would silently delete two rows of real image
+    while keeping the garbage. Telemetry words are counters and serial numbers,
+    so as pixel values they sit nowhere near the scene; the block whose median
+    deviates further from the body median is the telemetry.
+    """
+    h = frame.shape[0]
+    extra = h - expect_h
+    if extra <= 0:
+        return frame, 0
+    if h <= 2 * extra:                      # too small to judge; assume footer
+        return frame[:expect_h], extra
+
+    body = np.median(frame[extra:h - extra].astype(np.float64))
+    top = abs(np.median(frame[:extra].astype(np.float64)) - body)
+    bot = abs(np.median(frame[h - extra:].astype(np.float64)) - body)
+    if top > bot:
+        return frame[extra:], extra
+    return frame[:h - extra], extra
 DEFAULT_DELTA_C = 4.0      # radiometric: °C above ambient
 DEFAULT_PCTL = 96.0        # AGC: percentile of brightness treated as "hot"
 
@@ -252,6 +295,7 @@ class ThermalCamera:
         self.index = device_index
         self.radiometric = False
         self.scale = 0.01
+        self._warned_telemetry = False
 
         # Try raw 16-bit first.
         cap = cv2.VideoCapture(device_index)
@@ -265,6 +309,7 @@ class ThermalCamera:
 
         ok, probe = cap.read()
         if ok and probe is not None and probe.dtype == np.uint16:
+            probe, _ = strip_telemetry(probe)   # telemetry would skew the sniff
             self.cap = cap
             self.radiometric = True
             med = float(np.median(probe))
@@ -293,6 +338,12 @@ class ThermalCamera:
             return None, False
         if frame.ndim == 3:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Before ANY value is interpreted: a telemetry-enabled module sends
+        # 160x122 and those two rows are not image. See strip_telemetry().
+        frame, n_tel = strip_telemetry(frame)
+        if n_tel and not self._warned_telemetry:
+            print(f"  telemetry detected: {n_tel} rows stripped per frame")
+            self._warned_telemetry = True
         if self.radiometric and frame.dtype == np.uint16:
             return frame.astype(np.float32) * self.scale - 273.15, True
         return frame.astype(np.float32), False
@@ -312,7 +363,10 @@ def scan_devices(max_index=6):
         ok, f = cap.read()
         if ok and f is not None:
             h, w = f.shape[:2]
-            looks_lepton = (w == LEPTON_W and h in (LEPTON_H, LEPTON_H * 2)) or f.dtype == np.uint16
+            # +TELEMETRY_ROWS covers modules with telemetry enabled (160x122)
+            heights = (LEPTON_H, LEPTON_H + TELEMETRY_ROWS,
+                       LEPTON_H * 2, LEPTON_H * 2 + TELEMETRY_ROWS)
+            looks_lepton = (w == LEPTON_W and h in heights) or f.dtype == np.uint16
             out.append((i, w, h, str(f.dtype), looks_lepton))
         cap.release()
     return out

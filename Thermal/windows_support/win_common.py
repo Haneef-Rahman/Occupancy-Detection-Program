@@ -43,12 +43,61 @@ import numpy as np                                          # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 THERMAL = os.path.dirname(HERE)
+if THERMAL not in sys.path:
+    sys.path.insert(0, THERMAL)
+
+import thermal_detect as TD                                 # noqa: E402
 
 # DirectShow first: it honours CAP_PROP_CONVERT_RGB=0 more reliably than Media
 # Foundation, which is what lets the raw 16-bit frames through.
 BACKENDS = [("CAP_DSHOW", cv2.CAP_DSHOW), ("CAP_MSMF", cv2.CAP_MSMF)]
 
-STATE = {"backend": "unknown", "operator": "unknown", "radiometric": None}
+# Frame sizes to ask for, as FALLBACKS ONLY.
+#
+# Found by Adrian, 2026-09-14: on his board setting the Y16 fourcc alone was
+# not enough — the driver stayed in 8-bit mode and backend_probe reported "no
+# radiometric path found" on a camera that was streaming 16-bit perfectly well
+# through his own script. Requesting the exact frame size FIRST is what makes
+# the format request stick.
+#
+# But we should not GUESS the size, because the camera already knows it: a
+# Lepton with telemetry enabled advertises 122 rows and one without advertises
+# 120. native_size() asks, and that answer is tried first. Whether telemetry is
+# on is a setting on the module, not something for this file to have an opinion
+# about. The list below only exists for the case where the driver refuses to
+# say — 122 before 120 because a telemetry-enabled module will never give you
+# 120, while a telemetry-disabled one just ignores the 122 request.
+SIZES = [(160, 122), (160, 120), (160, 244), (160, 240)]
+
+
+def native_size(index, bid):
+    """
+    Ask the driver what size it is already configured for.
+
+    Returns (w, h) or None. This is how telemetry gets detected rather than
+    assumed: 122 rows means the module has telemetry enabled, 120 means it does
+    not, and we simply request back whatever it just told us.
+    """
+    cap = None
+    try:
+        cap = cv2.VideoCapture(index, bid)
+        if not cap.isOpened():
+            return None
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # Sanity: must be Lepton-shaped, else the driver is reporting a default
+        # it does not mean (some report 640x480 until you read a frame).
+        if w == 160 and 118 <= h <= 250:
+            return (w, h)
+        return None
+    except Exception:
+        return None
+    finally:
+        if cap is not None:
+            cap.release()
+
+STATE = {"backend": "unknown", "operator": "unknown",
+         "radiometric": None, "telemetry": 0}
 
 
 def enter_thermal():
@@ -73,31 +122,56 @@ class WindowsThermalCamera:
         self.cap = None
         self.scale = 0.01              # TLinear high gain: counts are K*100
         self.radiometric = False
+        self.telemetry_rows = 0
 
         for name, bid in BACKENDS:
-            cap = cv2.VideoCapture(index, bid)
-            if not cap.isOpened():
-                cap.release()
-                continue
-            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-            try:
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"Y16 "))
-            except Exception:
-                pass
-            ok, probe = cap.read()
-            if ok and probe is not None and probe.dtype == np.uint16:
+            # What the camera says about itself goes first; the guesses after.
+            native = native_size(index, bid)
+            order = ([native] if native else []) + \
+                    [s for s in SIZES if s != native]
+
+            for (want_w, want_h) in order:
+                cap = cv2.VideoCapture(index, bid)
+                if not cap.isOpened():
+                    cap.release()
+                    continue
+                # ORDER MATTERS. Size, then CONVERT_RGB, then fourcc. Setting
+                # the fourcc alone leaves some drivers in 8-bit mode.
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, want_w)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, want_h)
+                cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+                try:
+                    cap.set(cv2.CAP_PROP_FOURCC,
+                            cv2.VideoWriter_fourcc(*"Y16 "))
+                except Exception:
+                    pass
+
+                ok, probe = cap.read()
+                if not (ok and probe is not None and probe.dtype == np.uint16):
+                    cap.release()
+                    continue
+
+                # Strip BEFORE sniffing the scale — telemetry rows decode to
+                # about -273 C and +344 C and would skew the median.
+                probe, n_tel = TD.strip_telemetry(probe)
                 med = float(np.median(probe)) * self.scale - 273.15
                 if not (-40 < med < 80):
                     self.scale = 0.1           # low-gain mode reports K*10
                     med = float(np.median(probe)) * self.scale - 273.15
                 self.cap = cap
                 self.radiometric = True
+                self.telemetry_rows = n_tel
                 STATE["backend"] = name
                 STATE["radiometric"] = True
-                print(f"  camera: {name}, RADIOMETRIC "
-                      f"({self.scale} K/count, ambient ~{med:.1f} C)")
+                STATE["telemetry"] = n_tel
+                how = "reported by driver" if (want_w, want_h) == native \
+                      else "found by trying"
+                tel = (f", telemetry ON — {n_tel} rows stripped" if n_tel
+                       else ", telemetry off")
+                print(f"  camera: {name} @ {want_w}x{want_h} ({how}), "
+                      f"RADIOMETRIC ({self.scale} K/count, "
+                      f"ambient ~{med:.1f} C){tel}")
                 return
-            cap.release()
 
         if require_radiometric:
             sys.exit(
@@ -126,6 +200,9 @@ class WindowsThermalCamera:
             return None, False
         if frame.ndim == 3:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Shared with the Mac path — one implementation, so the two platforms
+        # cannot disagree about what a frame is.
+        frame, _ = TD.strip_telemetry(frame)
         if self.radiometric and frame.dtype == np.uint16:
             return frame.astype(np.float32) * self.scale - 273.15, True
         return frame.astype(np.float32), False
@@ -162,7 +239,8 @@ def patch_provenance(mod):
                     f"platform   {platform.platform()}\n"
                     f"camera     OpenCV {STATE['backend']} (Windows)\n"
                     f"opencv     {cv2.__version__}\n"
-                    f"radiometric {STATE['radiometric']}\n")
+                    f"radiometric {STATE['radiometric']}\n"
+                    f"telemetry  {STATE['telemetry']} rows stripped\n")
         return d, fh, w
 
     mod.open_capture = _open_capture

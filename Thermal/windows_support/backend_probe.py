@@ -43,19 +43,26 @@ FORMATS = [
     ("YUYV", "YUYV"),
 ]
 
-LEPTON_SIZES = ((160, 120), (160, 240))
+# 122/244 = telemetry enabled (2 extra rows per frame). Both are fine; the
+# recorder strips them. What matters here is only that the stream is 16-bit.
+LEPTON_SIZES = ((160, 120), (160, 122), (160, 240), (160, 244))
 
 
 def describe(frame):
     """Say what this frame actually is, in plain terms."""
     h, w = frame.shape[:2]
     size_ok = (w, h) in LEPTON_SIZES
+    tele = h in (122, 244)
     if frame.dtype == np.uint16:
         # Lepton TLinear: counts are kelvin*100 (or *10 in low-gain).
-        c = float(np.median(frame)) * 0.01 - 273.15
+        # Median over the telemetry rows too would skew this, so drop them.
+        core = frame[:120] if h == 122 else frame
+        c = float(np.median(core)) * 0.01 - 273.15
         plausible = -20 < c < 60
         kind = "RADIOMETRIC 16-bit" + ("" if plausible else "  (but scale looks odd)")
-        extra = f"median ~{c:.1f} C" if plausible else f"median raw {np.median(frame):.0f}"
+        extra = f"median ~{c:.1f} C" if plausible else f"median raw {np.median(core):.0f}"
+        if tele:
+            extra += ", telemetry ON"
     else:
         kind = "AGC 8-bit — NO TEMPERATURES"
         extra = f"values {frame.min()}-{frame.max()}"
