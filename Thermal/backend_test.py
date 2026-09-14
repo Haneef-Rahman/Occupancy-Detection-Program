@@ -11,6 +11,7 @@ import os
 os.environ["OPENCV_VIDEOIO_PRIORITY_OBSENSOR"] = "0"
 
 import cv2
+import thermal_detect as TD
 import numpy as np
 
 BACKENDS = [
@@ -42,7 +43,7 @@ for dev in (0, 1, 2):
 
             if fourcc:
                 cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+                cap.set(cv2.CAP_PROP_FOURCC, TD.fourcc(fourcc))
 
             ok, f = cap.read()
             if ok and f is not None:

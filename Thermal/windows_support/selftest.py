@@ -2,7 +2,7 @@
 """
 Prove the Windows support works, without needing the camera plugged in.
 
-    py -3.12 selftest.py
+    .\selftest.ps1
 
 WHY THIS EXISTS. None of this folder has ever run on a real Windows machine —
 it was written on a Mac against the Windows docs. So the first time Adrian runs
@@ -50,6 +50,14 @@ def main():
     print("=" * 66)
     print(f"  {platform.python_version()} on {platform.system()} "
           f"{platform.release()}")
+    if sys.version_info[:2] != (3, 12):
+        # Not a failure — recording only needs numpy and opencv. But the
+        # preview tools need ultralytics, which needs torch, and torch wheels
+        # lag new Python releases. Better said here than discovered later.
+        print(f"  NOTE: this is Python {sys.version_info[0]}."
+              f"{sys.version_info[1]}, not 3.12. Recording is fine;")
+        print("        preview.ps1 and the YOLO tools will not install.")
+        print("        To fix:  .\\setup.ps1 -Rebuild  (with 3.12 present)")
     print(f"  geteuid present: {hasattr(os, 'geteuid')}  "
           f"(False is expected on Windows)")
     print()
@@ -113,6 +121,17 @@ def main():
         DP.hand_back(tempfile.gettempdir())   # AttributeError if unpatched
         return "os.geteuid() no longer reached"
     check("dataset_pipeline geteuid fix", _patch_hb)
+
+    def _fourcc():
+        import cv2
+        import thermal_detect as TD
+        got = TD.fourcc("Y16 ")
+        assert isinstance(got, (int, float)) and got != 0, f"fourcc -> {got!r}"
+        which = ("cv2.VideoWriter_fourcc"
+                 if hasattr(cv2, "VideoWriter_fourcc")
+                 else "cv2.VideoWriter.fourcc")
+        return f"{which} -> {int(got)}"
+    check("Y16 fourcc can be built on this OpenCV", _fourcc)
 
     # ---- 3b. telemetry ---------------------------------------------------
     def _telemetry():
@@ -267,7 +286,7 @@ def main():
     print(f"All {len(RESULTS)} checks passed.\n")
     print("Everything works except the one thing this cannot test: whether")
     print("your Lepton gives OpenCV real temperatures. Plug it in and run:\n")
-    print("    py -3.12 backend_probe.py\n")
+    print("    .\\probe.ps1\n")
     print("Then record ONE short capture and send it over before doing a")
     print("full session — see the README.")
     return 0

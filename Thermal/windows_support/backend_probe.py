@@ -2,7 +2,7 @@
 """
 Find which OpenCV backend reaches your Lepton, and whether it gives real degrees.
 
-    py -3.12 backend_probe.py
+    .\probe.ps1
 
 RUN THIS FIRST. Before recording anything, before installing anything else.
 It answers the one question everything else depends on: does your Lepton hand
@@ -28,8 +28,13 @@ import os
 # The Orbbec backend spams and fails on some machines; switch it off first.
 os.environ["OPENCV_VIDEOIO_PRIORITY_OBSENSOR"] = "0"
 
+import sys                                                  # noqa: E402
+
 import cv2                                                  # noqa: E402
 import numpy as np                                          # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import thermal_detect as TD                                 # noqa: E402
 
 BACKENDS = [
     ("CAP_DSHOW", cv2.CAP_DSHOW),      # DirectShow — usually best for Y16
@@ -70,7 +75,7 @@ def describe(frame):
 
 
 def main():
-    print(f"opencv {cv2.__version__}\n")
+    print(f"opencv {cv2.__version__}, python {sys.version.split()[0]}\n")
     winners = []
 
     for dev in range(4):
@@ -89,8 +94,7 @@ def main():
                     # CONVERT_RGB=0 is the critical one: it tells OpenCV not to
                     # helpfully convert the raw 16-bit data into a colour image.
                     cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-                    cap.set(cv2.CAP_PROP_FOURCC,
-                            cv2.VideoWriter_fourcc(*fourcc))
+                    cap.set(cv2.CAP_PROP_FOURCC, TD.fourcc(fourcc))
 
                 ok, f = cap.read()
                 cap.release()
@@ -115,9 +119,11 @@ def main():
         dev, bname, fname = winners[0]
         print("GOOD. Radiometric data is reaching OpenCV.\n")
         print(f"  device {dev}, backend {bname}, format {fname}")
-        print(f"\n  Record with:   py -3.12 record_win.py --device {dev}")
-        print("  record_win.py already forces DSHOW then MSMF, so you should")
-        print("  not need to pass anything else.")
+        print(f"\n  Record with:   .\\record.ps1 -Operator adrian "
+              f"-Note \"where, time, ambient\"")
+        print("  The recorder forces DSHOW then MSMF and asks the driver for")
+        print("  its own frame size, so you should not need to pass anything")
+        print(f"  else. If it picks the wrong camera: -Device {dev}")
     else:
         got_lepton = False
         print("NO RADIOMETRIC PATH FOUND.\n")

@@ -38,7 +38,7 @@ and send Haneef the output. Nothing here needs the Lepton.
 
 **2. Camera probe — Lepton plugged in.**
 ```powershell
-py -3.12 backend_probe.py
+.\probe.ps1
 ```
 This answers the one question the self test cannot: does your Lepton hand
 OpenCV real temperatures? You want a line ending `<== USE THIS`. If nothing
@@ -48,7 +48,8 @@ does, **stop** and send the output — do not record.
 ```powershell
 .\preview.ps1
 ```
-Skip this if you haven't got a model — it needs ultralytics. Otherwise: point
+Skip this if you haven't got a model — it needs ultralytics, so it also needs
+the environment to be on Python 3.12. Otherwise: point
 it at yourself, check you're a bright blob, check the aim.
 
 **4. A thirty-second capture, then verify it.**
@@ -115,6 +116,7 @@ If it refuses, don't force it — send Haneef the probe output.
 |---|---|
 | `setup.ps1` | one-time: creates the environment, installs numpy + opencv, checks the camera |
 | `selftest.ps1` | proves everything works without a camera — run this first |
+| `probe.ps1` | checks the Lepton gives real temperatures — run this second |
 | `record.ps1` | records a session |
 | `check.ps1` | verifies captures before you send them |
 | `preview.ps1` | live preview / tracker |
@@ -187,6 +189,17 @@ long one.
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 That window only. Changes nothing permanently.
+
+**Python version — 3.12, please**
+Recording needs only numpy and opencv and runs on anything. `preview.ps1`,
+`w_live_yolo.py` and `w_integrated_launcher.py` need ultralytics, which needs
+torch, and torch wheels lag new Python releases by months. `setup.ps1` prefers
+3.12 and warns if it had to settle for something else. If it did and you want
+the preview: install 3.12 from python.org, then
+
+```powershell
+.\setup.ps1 -Rebuild
+```
 
 **`ModuleNotFoundError` even though pip said it installed**
 The Microsoft Store ships a fake `python.exe` that sits first on PATH with no

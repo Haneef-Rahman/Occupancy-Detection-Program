@@ -4,6 +4,7 @@ Report exactly what each video device delivers, so we can see why detection
 is misbehaving. Run:  python diagnose.py
 """
 import cv2
+import thermal_detect as TD
 import numpy as np
 import platform
 
@@ -22,7 +23,7 @@ for idx in range(6):
         if not convert_rgb:
             cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
             try:
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"Y16 "))
+                cap.set(cv2.CAP_PROP_FOURCC, TD.fourcc("Y16 "))
             except Exception:
                 pass
 

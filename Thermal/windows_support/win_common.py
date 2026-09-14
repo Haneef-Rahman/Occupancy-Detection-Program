@@ -140,11 +140,10 @@ class WindowsThermalCamera:
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, want_w)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, want_h)
                 cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-                try:
-                    cap.set(cv2.CAP_PROP_FOURCC,
-                            cv2.VideoWriter_fourcc(*"Y16 "))
-                except Exception:
-                    pass
+                # NOT wrapped in try/except any more. Swallowing a failure
+                # here leaves the driver in 8-bit AGC mode with no error at
+                # all, which is the one outcome this folder exists to prevent.
+                cap.set(cv2.CAP_PROP_FOURCC, TD.fourcc("Y16 "))
 
                 ok, probe = cap.read()
                 if not (ok and probe is not None and probe.dtype == np.uint16):

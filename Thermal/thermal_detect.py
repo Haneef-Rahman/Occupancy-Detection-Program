@@ -98,6 +98,23 @@ LEPTON_W, LEPTON_H = 160, 120
 #
 # Telemetry can sit at the TOP (header) or the BOTTOM (footer) depending on
 # how the module is configured, so nothing here assumes which end.
+def fourcc(code="Y16 "):
+    """
+    Build a FOURCC int, whichever OpenCV this is.
+
+    OpenCV 5 removed the free function cv2.VideoWriter_fourcc in favour of the
+    classmethod cv2.VideoWriter.fourcc. This matters more than it looks: the
+    call sites wrap it in try/except, so on OpenCV 5 the fourcc request would
+    be skipped SILENTLY and the driver would stay in 8-bit AGC mode — the exact
+    failure this whole Windows kit exists to prevent, arriving with no error
+    message. Adrian is on opencv 5.0.0 / Python 3.14 (2026-09-14).
+    """
+    fn = getattr(cv2, "VideoWriter_fourcc", None)
+    if fn is None:
+        fn = cv2.VideoWriter.fourcc
+    return fn(*code)
+
+
 TELEMETRY_ROWS = 2
 
 
@@ -303,7 +320,7 @@ class ThermalCamera:
             raise RuntimeError(f"Could not open video device {device_index}")
         cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
         try:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"Y16 "))
+            cap.set(cv2.CAP_PROP_FOURCC, fourcc("Y16 "))
         except Exception:
             pass
 
