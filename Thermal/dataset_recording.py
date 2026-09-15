@@ -84,7 +84,13 @@ def yolo_omegas(model, data, conf, imgsz):
 
     Class 0 detections are dropped here rather than filtered later, so there is
     no path by which a person box reaches the label file.
+
+    model=None (--no-model) yields no boxes at all. The frames are still
+    recorded; they simply arrive unlabelled for a human to annotate. That is
+    honest — a machine label is a guess wearing the clothes of ground truth.
     """
+    if model is None:
+        return []
     res = model.predict(render_for_cnn(data), verbose=False,
                         conf=conf, imgsz=imgsz)[0]
     out = []
@@ -164,7 +170,7 @@ def open_capture(note, conf, weights):
     # which weights produced which silver labels.
     with open(os.path.join(d, "source.txt"), "w") as fh:
         fh.write(f"recorder   dataset_recording.py\n"
-                 f"weights    {weights}\n"
+                 f"weights    {weights or 'NONE - frames are UNLABELLED'}\n"
                  f"conf       {conf}\n"
                  f"classes    omega only (class {OMEGA_CLASS}); no person boxes\n"
                  f"started    {datetime.now().isoformat(timespec='seconds')}\n"
@@ -238,12 +244,30 @@ def main():
     ap.add_argument("--no-review", action="store_true",
                     help="skip the review/ QA renders")
     ap.add_argument("--note", default="")
+    ap.add_argument("--no-model", action="store_true",
+                    help="record without YOLO. Frames are saved unlabelled — "
+                         "no ultralytics, no torch, no weights needed. Use "
+                         "this for collecting on a machine that is not going "
+                         "to train anything.")
     args = ap.parse_args()
 
-    weights = resolve_weights(args.weights)
-
-    from ultralytics import YOLO
-    model = YOLO(weights)
+    # WHY THIS IS NOT JUST `from ultralytics import YOLO` ANY MORE. It was, and
+    # it ran before open_camera, so a machine without ultralytics or without
+    # weights died with ModuleNotFoundError before the window ever appeared —
+    # on a setup whose whole premise was that recording needs only numpy and
+    # opencv. Found when Adrian went to test the recorder UI, 2026-09-15.
+    weights = None if args.no_model else resolve_weights(args.weights,
+                                                         required=False)
+    model = None
+    if weights:
+        from ultralytics import YOLO
+        model = YOLO(weights)
+    else:
+        why = "--no-model" if args.no_model else "no model in models/vN"
+        print(f"NO MODEL ({why}). Recording unlabelled frames.\n"
+              f"  The .npy temperature data is identical either way — only\n"
+              f"  the labels/ folder differs, and those were only ever a\n"
+              f"  starting point for human annotation.")
 
     cam = open_camera(args)
     print(f"conf:  {args.conf}   omega only, class {OMEGA_CLASS}")

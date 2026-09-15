@@ -50,7 +50,7 @@ def latest_weights():
     return got[-1][1] if got else None
 
 
-def resolve_weights(explicit=None, quiet=False):
+def resolve_weights(explicit=None, quiet=False, required=True):
     """
     The weights a tool should use: the explicit one, else the newest.
 
@@ -68,6 +68,11 @@ def resolve_weights(explicit=None, quiet=False):
 
     w = latest_weights()
     if not w:
+        if not required:
+            # Some tools can run without a model at all — the recorder, for
+            # one, which only needs a model to write silver labels. Making
+            # that fatal means a collaborator with no weights cannot record.
+            return None
         sys.exit(f"no model found in {MODELS_DIR}/vN/best.pt — train one, or "
                  f"pass --weights")
     if not quiet:

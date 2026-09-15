@@ -130,8 +130,11 @@ If it refuses, don't force it — send Haneef the probe output.
 | `w_dataset_pipeline.py` | build a dataset from captures (you probably won't need it) |
 | `requirements-win.txt` | numpy and opencv, nothing else |
 
-No PyTorch, no ultralytics, no CUDA. Recording doesn't need them, and leaving
-them out turns a 2 GB install into a 60-second one.
+No PyTorch, no ultralytics, no CUDA. Recording doesn't need them — it saves
+the raw temperature frames and leaves the labelling to Haneef — and leaving
+them out turns a 2 GB install into a 60-second one. `record.ps1` notices they
+are absent and records unlabelled automatically; you don't have to pass
+anything. To be explicit about it, add `-NoModel`.
 
 **Nothing in the parent folder is modified.** Every `w_*.py` imports the real
 tool from `Thermal\` and swaps out only what's Unix-specific — the camera

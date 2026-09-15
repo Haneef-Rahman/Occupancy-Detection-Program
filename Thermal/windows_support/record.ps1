@@ -13,7 +13,10 @@ param(
     [string]$Operator = "",
     [string]$Note = "",
     [int]$Device = 0,
-    [switch]$AllowAgc
+    [switch]$AllowAgc,
+    # Record without YOLO. Frames are saved unlabelled — no ultralytics, no
+    # torch, no weights. This is the normal mode for collecting data.
+    [switch]$NoModel
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,4 +39,5 @@ if (-not $Note) {
 $a = @((Join-Path $here "w_dataset_recording.py"),
        "--operator", $Operator, "--note", $Note, "--device", $Device)
 if ($AllowAgc) { $a += "--allow-agc" }
+if ($NoModel)  { $a += "--no-model" }
 & $vpy @a
