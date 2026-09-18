@@ -247,3 +247,19 @@ mmWave/mmwave_view_*.png
 # third-party build dependency, not project code
 libuvc/
 **/libuvc/
+
+# ---- FLUXNET: merged working directories ----
+# dataset_pipeline.py stage 2 copies the selected captures into a fresh
+# logs/merged_YYYYMMDD_HHMMSS/ and works there. Derived data: png/ re-renders
+# from npy/, labels/ re-runs from the model, review/ re-draws, triage.csv
+# recomputes from a seed. 15 of them were carrying 63,114 files and 3.5 GB of
+# packed objects in a repo whose source is ~30 python files.
+#
+# NOTE: this also drops labels_human/ inside merged dirs (6,321 hand-annotated
+# files). They are the one thing here that is not regenerable, so if you want
+# them kept, change this line to `merged_*/*` and add
+# `!Thermal/logs/merged_*/labels_human/` — a directory exclusion cannot be
+# negated from the inside, which is why the trailing slash matters.
+#
+# logs/capture_* is untouched.
+Thermal/logs/merged_*/
