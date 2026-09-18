@@ -570,6 +570,7 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
         pad.first = None
 
         S = scale
+        hint_msg = ""
         while True:
             vis = cv2.resize(TD.colorize(arr), None, fx=S, fy=S,
                              interpolation=cv2.INTER_NEAREST)
@@ -633,8 +634,22 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
                              "ENTER next  b back  d drop  q quit",
                         (12, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
                         (140, 140, 152), 1, cv2.LINE_AA)
+            if hint_msg:
+                (tw, _), _ = cv2.getTextSize(hint_msg,
+                                             cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+                cv2.putText(bar, hint_msg, (bar.shape[1] - tw - 12, 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 200, 255), 1,
+                            cv2.LINE_AA)
+
             cv2.imshow(win, np.vstack([vis, bar]))
             k = cv2.waitKey(20) & 0xFF
+
+            # Keys that belong to the OTHER stage-4 tool. Pressing one here
+            # used to do nothing at all, which reads as a broken feature rather
+            # than as the wrong window — there is no live model in this tool to
+            # have a confidence gate over, and never was.
+            if k in (ord("["), ord("]"), ord("m")):
+                hint_msg = "that key is --live only (annotate_live.py)"
 
             if k in (13, 10, ord("n")):
                 # pad.boxes verbatim to the representative; members get
@@ -1119,7 +1134,12 @@ def main():
                          "on the frame it actually landed on.")
     args = ap.parse_args()
 
-    weights = resolve_weights(args.weights)
+    # NOT required=True. Only stage 5 (verify) and --live need a model at all;
+    # stages 1-4 and 6-7 never touch one. Resolving hard here killed the whole
+    # run before stage 1 on any machine without models/vN/best.pt — which is
+    # every collaborator's machine, since the weights are not in the repo. The
+    # stages that genuinely need it say so when they are reached.
+    weights = resolve_weights(args.weights, required=False)
 
     root = args.root or load_state()
     if args.start > 2 and not root:
@@ -1157,6 +1177,10 @@ def main():
                 if args.live else "corner drawing")
         print("\n" + "=" * 60 +
               f"\nSTAGE 4  annotate (omega only — {mode})\n" + "=" * 60)
+        if args.live and not weights:
+            sys.exit("--live needs a model: it proposes boxes with it. "
+                     "Put one at models/vN/best.pt, pass --weights, or drop "
+                     "--live and draw the corners by hand.")
         if args.live:
             # Subprocess, not an import: annotate_live.py imports THIS module
             # for commit()/snap_to_yolo()/Pad, so importing it back would be a
@@ -1181,14 +1205,25 @@ def main():
     # ---- 5 verify --------------------------------------------------------
     if args.start <= 5:
         print("\n" + "=" * 60 + "\nSTAGE 5  verify propagated boxes\n" + "=" * 60)
-        n = verify_propagated(root, weights, conf=args.conf, apply=False)
-        if n:
-            ans = input(f"\napply {n} deletions? [y/N]: ").strip().lower()
-            if ans in ("y", "yes"):
-                verify_propagated(root, weights, conf=args.conf, apply=True)
-                hand_back(root)
-            else:
-                print("  left unchanged")
+        if not weights:
+            # A cross-check, not a producer of labels. Skipping it costs you
+            # the second opinion on propagated boxes; it does not invalidate
+            # anything already in labels_human/. Better than refusing to build
+            # a dataset at all on a machine with no model.
+            print("SKIPPED - no model. This stage only re-checks propagated\n"
+                  "  boxes against YOLO; your human labels are unaffected.\n"
+                  "  Put one at models/vN/best.pt and re-run with --from 5\n"
+                  "  to get the cross-check.")
+        else:
+            n = verify_propagated(root, weights, conf=args.conf, apply=False)
+            if n:
+                ans = input(f"\napply {n} deletions? [y/N]: ").strip().lower()
+                if ans in ("y", "yes"):
+                    verify_propagated(root, weights, conf=args.conf,
+                                      apply=True)
+                    hand_back(root)
+                else:
+                    print("  left unchanged")
 
     # ---- 6 review --------------------------------------------------------
     if args.start <= 6:

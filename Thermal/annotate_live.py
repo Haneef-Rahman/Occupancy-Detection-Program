@@ -646,6 +646,13 @@ def main():
                 boxes.pop(doomed)
             elif k == ord(" "):
                 drop_corner()
+            elif k == ord("m"):
+                # There WAS an m here for one revision, as a mode toggle. It
+                # was the wrong design — it took the mouse button away from the
+                # proposals — so corners moved to SPACE and both are live at
+                # once. Anyone who learned `m` in that window gets told, rather
+                # than pressing a dead key.
+                msg = "corners are on SPACE now - proposals stay clickable"
             elif k == ord("u"):
                 # Cancel a half-placed corner before undoing a finished box.
                 # Otherwise `u` after one stray click silently removes the last

@@ -42,6 +42,8 @@ TWO SEPARATE RULES, often confused:
 """
 
 import argparse
+import collections
+import csv
 import glob
 import os
 import random
@@ -171,8 +173,7 @@ def main():
             byc = {}
             tri = os.path.join(cap, "triage.csv")
             if os.path.exists(tri):
-                import csv as _csv
-                for r in _csv.DictReader(open(tri)):
+                for r in csv.DictReader(open(tri)):
                     byc[r["file"]] = int(r["cluster"])
             groups = {}
             for it in gold:
@@ -199,6 +200,19 @@ def main():
     boxes = {"train": 0, "val": 0}
     per_class = {0: 0, 1: 0}
     empty = 0
+
+    # Certified negatives, per capture. An empty label file already reads as
+    # "background" to YOLO, so these need no special handling to TRAIN on —
+    # this is purely so the counts are visible. An empty frame that arrived by
+    # accident and one a human certified are worth different amounts, and
+    # without this you cannot tell how many of each you have.
+    negatives = {}
+    for cap in caps:
+        np_path = os.path.join(cap, "negatives.csv")
+        if os.path.exists(np_path):
+            negatives[cap] = {r["file"]: r.get("kind", "hard")
+                              for r in csv.DictReader(open(np_path))}
+    neg = {"train": collections.Counter(), "val": collections.Counter()}
 
     prov = {"train": {"gold": 0, "silver": 0}, "val": {"gold": 0, "silver": 0}}
     # A held-out capture that silently contributes nothing is the dangerous
@@ -233,6 +247,8 @@ def main():
                         lines = [l for l in fh.read().split("\n") if l.strip()]
                     if not lines:
                         empty += 1
+                        kind = negatives.get(cap, {}).get(stem)
+                        neg[split][kind or "uncertified"] += 1
                     boxes[split] += len(lines)
                     for l in lines:
                         try:
@@ -278,6 +294,8 @@ def main():
                 lines = [l for l in fh.read().split("\n") if l.strip()]
             if not lines:
                 empty += 1
+                kind = negatives.get(cap, {}).get(stem)
+                neg[split][kind or "uncertified"] += 1
             boxes[split] += len(lines)
             for l in lines:
                 try:
@@ -301,6 +319,22 @@ def main():
     print(f"classes: person {per_class[0]}, omega {per_class[1]}")
     print(f"empty frames (no object): {empty} "
           f"({100.0 * empty / max(1, sum(counts.values())):.0f}%)")
+    n_hard = neg["train"]["hard"] + neg["val"]["hard"]
+    n_unc = neg["train"]["uncertified"] + neg["val"]["uncertified"]
+    if empty:
+        print(f"  certified negatives: {n_hard} hard "
+              f"(train {neg['train']['hard']} / val {neg['val']['hard']})"
+              + (f", {n_unc} uncertified" if n_unc else ""))
+    if n_hard and not neg["train"]["hard"]:
+        # Every hard negative landing in val is the worst possible outcome: the
+        # model never trains on the object it invents people from, and the
+        # number that would have told you shows up as a val-only surprise.
+        print("  WARNING: every hard negative is in VAL. The model will not "
+              "train on any of them.")
+    if not empty:
+        print("  WARNING: no background frames at all. The network is never "
+              "shown a scene and told there is nobody in it — which is how a "
+              "hot 3D printer becomes a person. Press g in the annotator.")
     print(f"provenance: train gold {prov['train']['gold']} / "
           f"silver {prov['train']['silver']}   |   "
           f"val gold {prov['val']['gold']} (human-only by construction)")

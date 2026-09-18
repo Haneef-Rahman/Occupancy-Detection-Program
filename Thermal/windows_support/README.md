@@ -119,6 +119,7 @@ If it refuses, don't force it — send Haneef the probe output.
 | `probe.ps1` | checks the Lepton gives real temperatures — run this second |
 | `record.ps1` | records a session |
 | `check.ps1` | verifies captures before you send them |
+| `pipeline.ps1` | turn your captures into annotated labels — no model needed |
 | `preview.ps1` | live preview / tracker |
 | `selftest.py` | the ten checks |
 | `backend_probe.py` | finds which camera backend gives real temperatures |
@@ -127,7 +128,7 @@ If it refuses, don't force it — send Haneef the probe output.
 | `w_dataset_recording.py` | the recorder |
 | `w_live_yolo.py` | live preview with detections (needs a model) |
 | `w_integrated_launcher.py` | full tracker (needs a model) |
-| `w_dataset_pipeline.py` | build a dataset from captures (you probably won't need it) |
+| `w_dataset_pipeline.py` | build a dataset from captures (driven by `pipeline.ps1`) |
 | `requirements-win.txt` | numpy and opencv, nothing else |
 
 No PyTorch, no ultralytics, no CUDA. Recording doesn't need them — it saves
@@ -226,6 +227,40 @@ frame. `source.txt` records that it happened. Found by you, 2026-09-14.
 **"No radiometric stream found"**
 Don't use `-AllowAgc` to get past it unless Haneef says so. That flag exists for
 one rare case and it produces data we can't merge.
+
+---
+
+## Annotating (optional, and very welcome)
+
+Recording is the job. But labelling is the bottleneck — one person drawing
+boxes on thousands of clusters — so if you have time, this is where it goes
+furthest.
+
+```powershell
+.\pipeline.ps1 -From 4
+```
+
+**You do not need a model, a GPU, or anything setup.ps1 skipped.** You draw the
+boxes yourself; stages that use the network say SKIPPED and carry on.
+
+Two left-clicks are OPPOSITE CORNERS of the head-and-shoulders box, not a drag.
+Hover a corner and press DEL to remove a box, `u` undoes, `ENTER` commits and
+moves on, `q` stops (everything already committed is saved).
+
+The key worth knowing is **`g`**:
+
+> `g` commits the frame as a HARD NEGATIVE — nobody in it, **and** it contains
+> something that looks like it should have fired. A running 3D printer, sunlit
+> pavement, a radiator, a laptop vent.
+
+The training set contains **zero** frames without a person. The network has
+never once been shown a scene and told there is nobody in it, which is exactly
+why it invented people in a room full of hot printers. An empty corridor
+teaches it almost nothing — nothing in it was ever going to fire. A hot printer
+certified "no person" teaches it the thing it actually got wrong.
+
+So the captures you were asked for in the section above are the same ones worth
+annotating with `g`. Record the hot room, then mark it.
 
 ---
 
