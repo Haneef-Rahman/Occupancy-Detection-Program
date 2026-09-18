@@ -1,0 +1,6 @@
+recorder   dataset_recording.py
+weights    /Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v3/best.pt
+conf       0.37
+classes    omega only (class 1); no person boxes
+started    2026-09-18T11:45:20
+note       
