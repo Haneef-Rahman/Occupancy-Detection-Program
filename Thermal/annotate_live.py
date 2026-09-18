@@ -6,13 +6,21 @@ EXPERIMENTAL. Annotate by pointing at people, not by drawing rectangles.
 
     hover a hot object   the model proposes an omega box under your cursor
     LEFT CLICK           accept it
+    SPACE, SPACE         draw a box yourself: two opposite corners at the
+                         crosshair. Works at any time — the proposals stay
+                         live, so you can click the two heads the model found
+                         and draw the third it missed without changing mode.
     ENTER (picked none)  accept everything currently previewed, and move on
     ENTER (picked some)  commit exactly what you picked
     x                    commit EMPTY — nobody in this cluster
+    g                    commit as a HARD NEGATIVE — nobody here, and the
+                         frame contains something that looks like it should
+                         fire (hot printer, sunlit pavement, radiator)
     r                    RE-SCAN just the object you are hovering
     hover + e / DEL      delete a box you accepted
     [ ]                  lower / raise the confidence gate, live
-    u undo   c clear   x empty   ENTER next   b back   d drop   q quit
+    u undo (cancels a half-placed corner first)   c clear
+    x empty   g negative   ENTER next   b back   d drop   q quit
 
 WHAT IS DIFFERENT. annotate.py and dataset_pipeline.py use the model PASSIVELY:
 you draw, and later something checks your work at 0.29. Here the model is in the
@@ -25,10 +33,27 @@ geometric noise. The model's box is derived from the image every time and is
 consistent frame to frame. When it is right, accepting it is strictly better
 than redrawing it — faster AND more precise.
 
-WHY IT IS EXPERIMENTAL, AND WHAT `r` IS FOR. You can only accept boxes the
-model proposes, so a head it does not find cannot be annotated — and a MISSING
+WHY SPACE EXISTS. Everything above is true only while the model is right. It was
+once the case here that you could ONLY accept what the model proposed, so a head
+it could not find at any confidence could not be labelled at all — and a MISSING
 box is the worst label error there is: it teaches the network that a person is
 background. review.py sorts misses ahead of every bad-IoU box for that reason.
+The old escape hatch was to mark the cluster `d` and redo it in
+dataset_pipeline.py, which meant leaving the tool to fix the tool's one gap.
+
+Space closes it, IN ADDITION to the proposals rather than instead of them. The
+first version of this put corner-drawing on a mode key that took over the mouse
+button, which defeats the point: the frame where you need to draw is usually a
+frame where the model also got two people right, and you want both without
+switching. Corners are on the space bar so nothing has to be given up.
+
+Two opposite corners, not click-and-drag, for the reasons in Pad's docstring.
+Boxes you draw join the same list as proposals you accept and commit by the same
+path; nothing downstream can tell which came from where, and nothing should.
+
+WHAT `r` IS FOR. Prefer it to `m`. A box the model derives from the image is
+consistent frame to frame; a box you draw carries your hand's error into the
+labels as geometric noise.
 
 `r` is the answer to that. It re-runs inference on a window around your cursor
 alone, so the object gets a second look on its own terms: NMS is not competing
@@ -36,8 +61,7 @@ across the whole frame, the head fills far more of the input, and the
 surrounding warm clutter is absent. If something is there, this is what finds
 it. Point at the person, press r, then press [ down to see what came back.
 
-If a person survives that and still has no box, mark the cluster `d` and
-annotate it in dataset_pipeline.py, which still has corner drawing. Do not
+If a person survives that and still has no box, draw it with SPACE. Do not
 leave the person unboxed.
 
 THE SCAN WINDOW SIZES ITSELF. It is not a fixed square: it is the bounding box
@@ -60,7 +84,8 @@ pass, on demand, on one object.
 CONTRACT. Identical to dataset_pipeline.py stage 4: reads triage.csv, writes
 labels_human/, propagates to cluster members with motion compensation, snaps
 propagated boxes to YOLO on their own frame. The representative is written
-verbatim. Nothing here edits a frame you drew on.
+verbatim. Nothing here edits a frame you drew on. `g` additionally appends to
+negatives.csv, by the same helper stage 4 uses.
 """
 
 import argparse
@@ -82,6 +107,8 @@ CAND_COL = (255, 255, 255)        # the proposal under your cursor
 DOOMED_COL = (70, 70, 255)        # what e/DEL would remove
 DIM_COL = (95, 95, 105)           # other proposals above the gate
 ARM_COL = (120, 220, 140)         # proposals ENTER is about to accept wholesale
+MANUAL_COL = (255, 120, 255)      # the box you are drawing by hand
+NEG_COL = (150, 150, 255)         # hard-negative banner
 
 CONF_STEP = 0.01
 CONF_MIN, CONF_MAX = 0.01, 0.95
@@ -378,7 +405,22 @@ def main():
     win = "annotate_live (experimental)"
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
 
-    state = {"cursor": (0, 0), "click": False}
+    # CORNERS ARE ON THE SPACE BAR, NOT THE MOUSE BUTTON.
+    #
+    # The obvious design is a mode key that swaps the left button between
+    # "accept the proposal" and "place a corner". It was written that way first
+    # and it was wrong: the two are meant to be available AT THE SAME TIME.
+    # Half the value of drawing by hand is drawing the head the model missed
+    # while still clicking the three it found, and a mode makes you leave one
+    # to reach the other.
+    #
+    # Space resolves it with no mode at all. The cursor is already tracked for
+    # the hover proposal and the crosshair already shows which sensor pixel you
+    # are on, so a keypress has somewhere unambiguous to land. It is also
+    # steadier than clicking: on a trackpad, pressing the button moves the
+    # pointer, and at 6x zoom that is most of a sensor pixel.
+    state = {"cursor": (0, 0), "click": False,
+             "first": None, "pending": None}
 
     def on_mouse(ev, mx, my, flags, _):
         state["cursor"] = (mx / args.scale, my / args.scale)
@@ -387,10 +429,21 @@ def main():
 
     cv2.setMouseCallback(win, on_mouse)
 
+
+    def drop_corner():
+        """Space: first press arms a corner, second completes the box."""
+        p = state["cursor"]
+        if state["first"] is None:
+            state["first"] = p
+        else:
+            state["pending"] = (state["first"], p)
+            state["first"] = None
+
     conf = args.conf
     i = 0
     deleted = set()
     snapped_total = 0
+    neg_total = 0
 
     while 0 <= i < len(clusters):
         cid = clusters[i]
@@ -408,6 +461,8 @@ def main():
         S = args.scale
         advance = None
         msg = ""
+        state["first"] = None      # a half-drawn box never crosses a cluster
+        state["pending"] = None
         refreshed = set()      # coarse cells already given a second look
         while advance is None:
             cand = candidate(dets, conf, state["cursor"])
@@ -428,7 +483,10 @@ def main():
             # to become, not as background detail — pressing ENTER for "next"
             # and silently writing five boxes you never looked at is exactly
             # the failure this colour exists to prevent.
-            arming = (not boxes) and bool(above)
+            # A half-placed corner means you are mid-box, so ENTER is "finish
+            # what I am doing", never "accept all five proposals and move on".
+            arming = ((not boxes) and bool(above)
+                      and state["first"] is None)
 
             for (x0, y0, x1, y1, s) in above:
                 if cand and (x0, y0, x1, y1) == cand[:4]:
@@ -479,21 +537,35 @@ def main():
                           (int(sw[2] * S), int(sw[3] * S)),
                           (90, 130, 90) if auto else (60, 60, 68), 1)
 
+            # First corner placed, second not yet: mark it and rubber-band to
+            # the cursor, so the box you are about to make is visible before
+            # you commit to it. Same feedback as dataset_pipeline.py.
+            if state["first"]:
+                fx, fy = state["first"]
+                cv2.drawMarker(vis, (int(fx * S), int(fy * S)), MANUAL_COL,
+                               cv2.MARKER_CROSS, 16, 2)
+                ux, uy = state["cursor"]
+                cv2.rectangle(vis, (int(fx * S), int(fy * S)),
+                              (int(ux * S), int(uy * S)), MANUAL_COL, 1)
+
             mx, my = int(cxp * S), int(cyp * S)
             cv2.line(vis, (mx, 0), (mx, vis.shape[0]), (90, 90, 100), 1)
             cv2.line(vis, (0, my), (vis.shape[1], my), (90, 90, 100), 1)
 
             n_above = len(above)
-            bar = np.full((72, vis.shape[1], 3), 16, np.uint8)
+            bar = np.full((92, vis.shape[1], 3), 16, np.uint8)
             cv2.putText(bar, f"cluster {i + 1}/{len(clusters)}   "
                              f"{rep['file']}   {len(members)} frames",
                         (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (220, 220, 230), 1, cv2.LINE_AA)
+            mode_txt = ("SPACE sets the opposite corner   [first corner set]"
+                        if state["first"] else "")
             cv2.putText(bar, f"accepted {len(boxes)}    gate {conf:.2f}  "
                              f"[ ]    proposals {n_above}/{len(dets)} "
                              f"(floor {args.floor:.2f})",
                         (12, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
                         OMEGA_COL, 1, cv2.LINE_AA)
+
 
             # Say out loud what ENTER does right now. It has three outcomes and
             # they are not interchangeable; the one that writes boxes you never
@@ -512,11 +584,17 @@ def main():
             cv2.putText(bar, enter_txt, (bar.shape[1] - tw - 12, 44),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.46, enter_col, 1,
                         cv2.LINE_AA)
-            cv2.putText(bar, "CLICK accept   e/DEL remove   r re-scan here   "
-                             "[ ] gate   u undo  c clear  x empty  "
-                             "ENTER next  b back  d drop  q quit",
-                        (12, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
-                        (140, 140, 152), 1, cv2.LINE_AA)
+            if mode_txt:
+                cv2.putText(bar, mode_txt, (12, 66),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.46, MANUAL_COL, 1,
+                            cv2.LINE_AA)
+
+            hint = ("CLICK accept   SPACE x2 draw corners   e/DEL remove   "
+                    "r re-scan here   [ ] gate   u undo  c clear  x empty  "
+                    "g NEGATIVE  ENTER next  b back  d drop  q quit")
+            cv2.putText(bar, hint, (12, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
+                        MANUAL_COL if state["first"] else (140, 140, 152), 1,
+                        cv2.LINE_AA)
             if msg:
                 (tw, _), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX,
                                              0.44, 1)
@@ -530,6 +608,19 @@ def main():
                 if cand and not dupe:
                     boxes.append((OMEGA_CLASS, cand[0], cand[1],
                                   cand[2], cand[3]))
+
+            if state["pending"]:
+                (ax, ay), (bx, by) = state["pending"]
+                state["pending"] = None
+                # A double-click, or two clicks on the same sensor pixel, would
+                # otherwise produce a zero-area box: invisible on screen, a
+                # NaN-width entry in the label file, and a training sample that
+                # means nothing. One sensor pixel minimum in both axes.
+                if abs(bx - ax) >= 1.0 and abs(by - ay) >= 1.0:
+                    boxes.append((OMEGA_CLASS, min(ax, bx), min(ay, by),
+                                  max(ax, bx), max(ay, by)))
+                else:
+                    msg = "box too small - two OPPOSITE corners"
 
             k = cv2.waitKey(20) & 0xFF
             if k == 255:
@@ -553,10 +644,19 @@ def main():
                 conf = min(CONF_MAX, round(conf + CONF_STEP, 3))
             elif k in DP.DELETE_KEYS and doomed is not None:
                 boxes.pop(doomed)
-            elif k == ord("u") and boxes:
-                boxes.pop()
+            elif k == ord(" "):
+                drop_corner()
+            elif k == ord("u"):
+                # Cancel a half-placed corner before undoing a finished box.
+                # Otherwise `u` after one stray click silently removes the last
+                # GOOD box and leaves the stray corner armed.
+                if state["first"]:
+                    state["first"] = None
+                elif boxes:
+                    boxes.pop()
             elif k == ord("c"):
                 boxes = []
+                state["first"] = None
             elif k in (13, 10, ord("n")):
                 if arming:
                     # Nothing hand-picked, but the gate is showing proposals:
@@ -570,6 +670,8 @@ def main():
                     advance = ("commit", boxes)
             elif k == ord("x"):
                 advance = ("commit", [])
+            elif k == ord("g"):
+                advance = ("negative", [])
             elif k == ord("b"):
                 advance = ("back", None)
             elif k == ord("d"):
@@ -578,10 +680,13 @@ def main():
                 advance = ("quit", None)
 
         what, payload = advance
-        if what == "commit":
+        if what in ("commit", "negative"):
             _, n = DP.commit(an, root, human_dir, members, payload, arr, H, W,
                              args.max_shift, args.min_corr, args.dedup_iou)
             snapped_total += n
+            if what == "negative":
+                neg_total += DP.mark_negative(root, members, cid, "hard",
+                                              "annotate_live")
             i += 1
         elif what == "back":
             i = max(0, i - 1)
@@ -596,6 +701,9 @@ def main():
     if snapped_total:
         print(f"snapped to YOLO geometry: {snapped_total} propagated boxes. "
               f"Representatives untouched.")
+    if neg_total:
+        print(f"hard negatives: {neg_total} frames certified -> "
+              f"{os.path.join(root, DP.NEGATIVES)}")
     if deleted:
         print(f"marked for deletion: {len(deleted)} frames "
               f"(run prune.py to remove)")

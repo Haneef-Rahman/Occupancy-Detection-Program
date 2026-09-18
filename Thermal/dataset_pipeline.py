@@ -70,6 +70,12 @@ STATE = os.path.join(HERE, ".pipeline_state.json")
 SPAN_C = (15.0, 45.0)
 OMEGA_CLASS = 1
 OMEGA_COL = (60, 220, 255)
+# A YOLO box you have not touched yet. Drawn thinner and cooler than your own
+# work, because on load EVERY box is one of these and they are not evidence of
+# anything — they are the machine's opening bid. Pressing ENTER promotes them
+# to gold labels verbatim, so "which of these have I actually looked at" is a
+# question the screen has to answer.
+SEED_COL = (150, 170, 120)
 
 TRIAGE_SIM = 0.03          # default 0.10 — tighter, so propagation drifts less
 TRIAGE_MAX_CLUSTER = 5     # default 30
@@ -112,6 +118,28 @@ CORNER_R = 3.0
 # that always works. Not `d`: that drops the whole cluster, and the two must
 # never be one fumbled keypress apart.
 DELETE_KEYS = (8, 127, ord("e"))
+
+# Deliberate negatives: frames a human looked at and certified contain NO
+# person, recorded here as a manifest rather than inferred from an empty label
+# file.
+#
+# WHY A MANIFEST AND NOT JUST AN EMPTY .txt. YOLO's convention is that an empty
+# label file means "background", which is already what `x` writes. But an empty
+# file is also what you get from a frame nobody has annotated yet, from a
+# cluster that was skipped, and from a bug. Three very different things with
+# identical bytes on disk. If negatives are going to be used as evidence
+# against false positives, they have to be distinguishable from an absence.
+#
+# The distinction between the two kinds matters more than it looks. v3a's
+# training set contains ZERO frames without a person, so the network has never
+# been shown a room and told "nothing here" — but an empty corridor teaches
+# almost nothing, because nothing in it was ever going to fire. A hot 3D
+# printer is the one that pays: it is the exact object the model invented a
+# person from. Counting them separately is what lets you tell whether you have
+# collected enough of the kind that matters.
+NEGATIVES = "negatives.csv"
+NEG_COLS = ("file", "cluster", "kind", "note", "marked")
+NEG_KINDS = ("hard", "plain")
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +541,7 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
     i = 0
     deleted = set()
     snapped_total = 0
+    neg_total = 0
     while 0 <= i < len(clusters):
         cid = clusters[i]
         members = by_cluster[cid]
@@ -530,10 +559,14 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
         if os.path.exists(hp):
             pad.boxes = [b for b in an.load_labels(hp, W, H)
                          if b[0] == OMEGA_CLASS]
+            # Already committed once, so every box here is yours — including
+            # any YOLO box you accepted by pressing ENTER over it.
+            untouched = set()
         else:
             # Seed from the YOLO silver label so you are correcting, not
             # starting from nothing. Class 0 is dropped on the way in.
             pad.boxes = list(seed_boxes)
+            untouched = {_key(b) for b in seed_boxes}
         pad.first = None
 
         S = scale
@@ -545,11 +578,15 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
             # delete key, so what you see and what happens cannot disagree.
             hover, how = pad.target()
 
-            for bi, (_, x0, y0, x1, y1) in enumerate(pad.boxes):
+            for bi, b in enumerate(pad.boxes):
+                _, x0, y0, x1, y1 = b
                 doomed = (bi == hover)
-                col = (70, 70, 255) if doomed else OMEGA_COL
+                seed = _key(b) in untouched
+                col = ((70, 70, 255) if doomed
+                       else SEED_COL if seed else OMEGA_COL)
                 cv2.rectangle(vis, (int(x0 * S), int(y0 * S)),
-                              (int(x1 * S), int(y1 * S)), col, 2)
+                              (int(x1 * S), int(y1 * S)), col,
+                              1 if seed and not doomed else 2)
                 if doomed:
                     # mark all four corners so it is obvious WHICH box is armed,
                     # not merely that something is
@@ -584,13 +621,16 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
                              f"{rep['file']}   {len(members)} frames", (12, 22),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 230), 1,
                         cv2.LINE_AA)
-            cv2.putText(bar, f"omega {len(pad.boxes)}"
+            n_seed = sum(1 for b in pad.boxes if _key(b) in untouched)
+            n_mine = len(pad.boxes) - n_seed
+            cv2.putText(bar, f"omega {len(pad.boxes)}   "
+                             f"{n_seed} from YOLO (thin), {n_mine} yours"
                              + ("   [first corner set]" if pad.first else ""),
                         (12, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
                         OMEGA_COL, 1, cv2.LINE_AA)
             cv2.putText(bar, "L-click x2 = corners   hover + DEL/e = delete   "
-                             "u undo   c clear   x empty   "
-                             "ENTER next   b back   d drop   q quit",
+                             "u undo  c clear  x empty  g NEGATIVE  "
+                             "ENTER next  b back  d drop  q quit",
                         (12, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
                         (140, 140, 152), 1, cv2.LINE_AA)
             cv2.imshow(win, np.vstack([vis, bar]))
@@ -622,6 +662,18 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
                        max_shift, min_corr, dedup_iou)
                 i += 1
                 break
+            if k == ord("g"):
+                # HARD NEGATIVE. Same labels on disk as `x` — empty, which is
+                # what YOLO reads as background — but additionally certified in
+                # negatives.csv so it can be counted and audited. Use it on the
+                # frames that look like they should fire and must not: hot
+                # printers, sunlit pavement, radiators, laptops.
+                commit(an, root, human_dir, members, [], arr, H, W,
+                       max_shift, min_corr, dedup_iou)
+                neg_total += mark_negative(root, members, cid, "hard",
+                                           "annotate_omega")
+                i += 1
+                break
             # No 'k' (keep) key, deliberately. annotate.py needs one because it
             # opens a frame with no boxes loaded, so "accept the machine's work"
             # is a distinct action. Here the YOLO boxes are already seeded into
@@ -636,6 +688,8 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
             if k in (ord("q"), 27):
                 cv2.destroyAllWindows()
                 print(f"\nstopped at cluster {i + 1}/{len(clusters)}")
+                if neg_total:
+                    print(f"hard negatives so far: {neg_total} frames")
                 return deleted
 
     cv2.destroyAllWindows()
@@ -643,7 +697,65 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
     if snapped_total:
         print(f"snapped to YOLO geometry: {snapped_total} propagated boxes "
               f"(IoU >= {dedup_iou}). Representatives untouched.")
+    if neg_total:
+        print(f"hard negatives: {neg_total} frames certified -> "
+              f"{os.path.join(root, NEGATIVES)}")
     return deleted
+
+
+def _key(b):
+    """Geometry key for 'is this still exactly the box YOLO gave me'."""
+    return tuple(round(float(v), 4) for v in b[1:5])
+
+
+def _read_negatives(root):
+    path = os.path.join(root, NEGATIVES)
+    if not os.path.exists(path):
+        return {}
+    return {r["file"]: r for r in csv.DictReader(open(path))}
+
+
+def _write_negatives(root, rows):
+    with open(os.path.join(root, NEGATIVES), "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(NEG_COLS)
+        for f in sorted(rows):
+            w.writerow([rows[f].get(c, "") for c in NEG_COLS])
+
+
+def mark_negative(root, members, cid, kind="hard", note=""):
+    """
+    Certify every frame in a cluster as containing no person.
+
+    Keyed by file, so marking the same cluster twice updates rather than
+    duplicating — you can go back with `b` and change your mind.
+    """
+    rows = _read_negatives(root)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    for m in members:
+        rows[m["file"]] = {"file": m["file"], "cluster": str(cid),
+                           "kind": kind, "note": note, "marked": stamp}
+    _write_negatives(root, rows)
+    return len(members)
+
+
+def unmark_negative(root, members):
+    """
+    Drop a cluster from the negative manifest.
+
+    Called whenever a commit writes at least one box. Without this, marking a
+    cluster negative and then going back and annotating it leaves a manifest
+    that says "certified no person" about frames that now carry a person box —
+    and the manifest is the thing downstream tools are meant to trust.
+    """
+    rows = _read_negatives(root)
+    gone = [m["file"] for m in members if m["file"] in rows]
+    if not gone:
+        return 0
+    for f in gone:
+        rows.pop(f)
+    _write_negatives(root, rows)
+    return len(gone)
 
 
 def snap_to_yolo(propagated, yolo, thresh=DEDUP_IOU):
@@ -722,6 +834,10 @@ def commit(an, root, human_dir, members, boxes, ref_arr, H, W,
     # passed through snap_to_yolo. What you drew is what is stored.
     rep = members[0]
     an.save_labels(os.path.join(human_dir, rep["file"] + ".txt"), boxes, W, H)
+
+    # Any box at all means this cluster is not a negative any more.
+    if boxes:
+        unmark_negative(root, members)
 
     unshifted = snapped = 0
     for m in members[1:]:
@@ -986,10 +1102,10 @@ def main():
     ap.add_argument("--out", default=None, help="dataset output directory")
     ap.add_argument("--live", action="store_true",
                     help="stage 4: use annotate_live.py — hover a person and "
-                         "the model proposes the box, click to accept. No "
-                         "corner drawing, so a person the model cannot see at "
-                         "any confidence cannot be labelled; mark those "
-                         "clusters 'd' and redo them without --live.")
+                         "the model proposes the box, click to accept. Press "
+                         "SPACE twice draws a box by hand when the model "
+                         "cannot see a person at any confidence; the "
+                         "proposals stay live while you do.")
     ap.add_argument("--live-conf", type=float, default=0.29,
                     help="with --live, the starting confidence gate. [ and ] "
                          "move it during annotation.")
@@ -1037,7 +1153,8 @@ def main():
 
     # ---- 4 annotate ------------------------------------------------------
     if args.start <= 4:
-        mode = "live, model-in-the-loop" if args.live else "corner drawing"
+        mode = ("live, model-in-the-loop (+ SPACE for manual corners)"
+                if args.live else "corner drawing")
         print("\n" + "=" * 60 +
               f"\nSTAGE 4  annotate (omega only — {mode})\n" + "=" * 60)
         if args.live:
