@@ -137,6 +137,19 @@ DELETE_KEYS = (8, 127, ord("e"))
 # printer is the one that pays: it is the exact object the model invented a
 # person from. Counting them separately is what lets you tell whether you have
 # collected enough of the kind that matters.
+# The frames a human actually drew on, recorded at commit time rather than
+# re-derived later.
+#
+# review.py's --skip-drawn used to infer the representative with annotate.py's
+# rule (fewest person boxes, first wins a tie) while BOTH annotators here take
+# members[0] unconditionally. They agree on every capture this project records,
+# because dataset_recording.py writes no person boxes so n_person is all-zero
+# and min() returns the first element. They stop agreeing the moment a merge
+# includes an older capture that does have person boxes — and the failure is
+# silent and exactly backwards: review would hide a propagated frame and show
+# you the one you drew.
+REPRESENTATIVES = "representatives.txt"
+
 NEGATIVES = "negatives.csv"
 NEG_COLS = ("file", "cluster", "kind", "note", "marked")
 NEG_KINDS = ("hard", "plain")
@@ -515,6 +528,7 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
     print(f"\n{len(clusters)} clusters, {len(done)} already annotated")
 
     pad = Pad()
+    view = [0]          # list so the inner loop can rebind it
     win = "annotate (omega only)"
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
 
@@ -572,7 +586,7 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
         S = scale
         hint_msg = ""
         while True:
-            vis = cv2.resize(TD.colorize(arr), None, fx=S, fy=S,
+            vis = cv2.resize(colorize_view(arr, view[0]), None, fx=S, fy=S,
                              interpolation=cv2.INTER_NEAREST)
 
             # Computed ONCE per frame and used for both the highlight and the
@@ -631,7 +645,7 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
                         OMEGA_COL, 1, cv2.LINE_AA)
             cv2.putText(bar, "L-click x2 = corners   hover + DEL/e = delete   "
                              "u undo  c clear  x empty  g NEGATIVE  "
-                             "ENTER next  b back  d drop  q quit",
+                             "v contrast  ENTER next  b back  d drop  q quit",
                         (12, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
                         (140, 140, 152), 1, cv2.LINE_AA)
             if hint_msg:
@@ -650,6 +664,9 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
             # have a confidence gate over, and never was.
             if k in (ord("["), ord("]"), ord("m")):
                 hint_msg = "that key is --live only (annotate_live.py)"
+            if k == ord("v"):
+                view[0] = (view[0] + 1) % len(VIEWS)
+                hint_msg = f"view: {VIEWS[view[0]][0]}"
 
             if k in (13, 10, ord("n")):
                 # pad.boxes verbatim to the representative; members get
@@ -718,9 +735,61 @@ def annotate_omega(root, scale=6, max_shift=16.0, min_corr=0.55,
     return deleted
 
 
+# Display stretches for the ANNOTATION WINDOW ONLY.
+#
+# thermal_detect.colorize() stretches percentile 1-99, which is right for a
+# room with two people in it: most of the palette goes to separating a warm
+# body from a cool wall. In a lecture hall it is exactly wrong. p1 is cold
+# ceiling and p99 is somebody's face, so the whole colour map is spent on a
+# distinction you can already make by eye, and the one you actually need —
+# this person's shoulder against the next person's shoulder — is compressed
+# into a few grey levels. Measured on capture_20260921_100706: body-vs-room is
+# 7.7 C out of a 18.6 C scene span.
+#
+# NOTHING HERE TOUCHES THE TRAINING DATA. The network is fed by
+# render_for_cnn() at the fixed SPAN_C; this only changes what your eyes get.
+# So you can switch it per frame with no consequence for the dataset at all.
+VIEWS = (
+    ("auto   p1-p99", 1.0, 99.0),       # the old behaviour, unchanged
+    ("crowd  p40-p99.5", 40.0, 99.5),   # palette on the warm half only
+    ("dense  p70-p100", 70.0, 100.0),   # bodies only; room clips to black
+)
+
+
+def colorize_view(arr, mode=0):
+    """colorize(), but with the percentile window chosen by the operator."""
+    _, plo, phi = VIEWS[mode % len(VIEWS)]
+    lo = float(np.percentile(arr, plo))
+    hi = float(np.percentile(arr, phi))
+    if hi - lo < 1e-3:
+        hi = lo + 1.0
+    norm = np.clip((arr - lo) / (hi - lo), 0, 1)
+    return cv2.applyColorMap((norm * 255).astype(np.uint8),
+                             cv2.COLORMAP_INFERNO)
+
+
 def _key(b):
     """Geometry key for 'is this still exactly the box YOLO gave me'."""
     return tuple(round(float(v), 4) for v in b[1:5])
+
+
+def note_representative(root, stem):
+    """Record that a human drew this frame. Idempotent."""
+    path = os.path.join(root, REPRESENTATIVES)
+    have = set()
+    if os.path.exists(path):
+        have = {ln.strip() for ln in open(path) if ln.strip()}
+    if stem in have:
+        return
+    with open(path, "a") as fh:
+        fh.write(stem + "\n")
+
+
+def read_representatives(root):
+    path = os.path.join(root, REPRESENTATIVES)
+    if not os.path.exists(path):
+        return set()
+    return {ln.strip() for ln in open(path) if ln.strip()}
 
 
 def _read_negatives(root):
@@ -849,6 +918,7 @@ def commit(an, root, human_dir, members, boxes, ref_arr, H, W,
     # passed through snap_to_yolo. What you drew is what is stored.
     rep = members[0]
     an.save_labels(os.path.join(human_dir, rep["file"] + ".txt"), boxes, W, H)
+    note_representative(root, rep["file"])
 
     # Any box at all means this cluster is not a negative any more.
     if boxes:
@@ -1084,17 +1154,37 @@ def build(root, out, val_fraction, seed):
 
 
 # ---------------------------------------------------------------------------
-def save_state(root):
-    json.dump({"root": root}, open(STATE, "w"))
+def save_state(root, live=None):
+    """
+    Remember the merge directory AND which annotator was chosen.
+
+    WHY --live IS PERSISTED. It used not to be, and that was a trap: you run
+    stage 4 with --live, learn its keys, stop for the night, resume tomorrow
+    with `--from 4`, and land silently in the corner annotator instead. Same
+    window title prefix, same frame, but SPACE does nothing, there is no
+    confidence gate, and clicking draws a corner rather than accepting a
+    proposal. It reads exactly like the tool reverted. Reported 2026-09-21.
+    """
+    prev = _load_state_raw()
+    d = {"root": root, "live": prev.get("live") if live is None else bool(live)}
+    json.dump(d, open(STATE, "w"))
+
+
+def _load_state_raw():
+    if os.path.exists(STATE):
+        try:
+            return json.load(open(STATE)) or {}
+        except Exception:
+            return {}
+    return {}
 
 
 def load_state():
-    if os.path.exists(STATE):
-        try:
-            return json.load(open(STATE)).get("root")
-        except Exception:
-            return None
-    return None
+    return _load_state_raw().get("root")
+
+
+def load_state_live():
+    return bool(_load_state_raw().get("live"))
 
 
 def main():
@@ -1115,6 +1205,10 @@ def main():
                     help="held-out fraction. Omitted: you are asked.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None, help="dataset output directory")
+    ap.add_argument("--no-live", dest="no_live", action="store_true",
+                    help="force the corner annotator even if the last run "
+                         "used --live. Without this, --live is remembered "
+                         "across resumes.")
     ap.add_argument("--live", action="store_true",
                     help="stage 4: use annotate_live.py — hover a person and "
                          "the model proposes the box, click to accept. Press "
@@ -1128,6 +1222,9 @@ def main():
                     help="IoU at which a PROPAGATED box is replaced by the "
                          "YOLO box on that frame. 0 disables snapping. "
                          "Never applies to representatives.")
+    ap.add_argument("--review-drawn", action="store_true",
+                    help="also review the frames you hand-annotated. Off by "
+                         "default: they are ground truth, not candidates.")
     ap.add_argument("--review-clusters", action="store_true",
                     help="review one frame per cluster instead of every frame. "
                          "Faster, but a propagated box is then never looked at "
@@ -1141,9 +1238,23 @@ def main():
     # stages that genuinely need it say so when they are reached.
     weights = resolve_weights(args.weights, required=False)
 
+    # --live sticks across resumes unless you say otherwise, so `--from 4`
+    # tomorrow gives you the same annotator you used today.
+    if args.no_live:
+        args.live = False
+    elif not args.live and load_state_live():
+        args.live = True
+        print("note: using --live (remembered from the last run). "
+              "Pass --no-live for the corner annotator.")
+
     root = args.root or load_state()
     if args.start > 2 and not root:
         sys.exit("nothing to resume — run from stage 1")
+
+    # Record the choice now, not only at stage 2. Resuming with
+    # `--from 4 --live` has to stick too, or the next resume forgets again.
+    if root:
+        save_state(root, live=args.live)
 
     # ---- 1 + 2 -----------------------------------------------------------
     if args.start <= 2:
@@ -1154,7 +1265,7 @@ def main():
         print("\n" + "=" * 60 + "\nSTAGE 2  merge\n" + "=" * 60)
         root = merge(sel)
         hand_back(root)
-        save_state(root)
+        save_state(root, live=args.live)
 
     print(f"\nworking directory: {root}")
 
@@ -1231,6 +1342,12 @@ def main():
         print("Ordered worst-first: frames with a warm blob and no box sort "
               "ahead of everything, then ascending box-vs-blob IoU.")
         cmd = [sys.executable, "review.py", root, "--scale", args.scale]
+        if not args.review_drawn and not args.review_clusters:
+            # The frames you drew on are not on trial. Reviewing them is asking
+            # a tool that scores box-vs-blob overlap to second-guess a human
+            # who looked at the frame — and its MISS check fires on any warm
+            # surface, so it will disagree with you about frames that are fine.
+            cmd.append("--skip-drawn")
         if not args.review_clusters:
             # EVERY frame, not one per cluster. review.py defaults to showing a
             # cluster's worst frame as its proxy, which is the right economy
