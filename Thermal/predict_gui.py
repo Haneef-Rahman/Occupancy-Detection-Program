@@ -359,13 +359,28 @@ class Predictor:
         return out
 
 
-def draw(rgb, dets, show_classes, scale):
+LABEL_FIELDS = (("cls", "class name"),
+                ("conf", "confidence"),
+                ("size", "box width (px)"),
+                ("range", "implied range (m)"))
+
+
+def draw(rgb, dets, show_classes, scale, fields=None):
     """
     Overlay boxes. Omega labels go above their box and person labels below,
     because an omega sits at the top of its person and the two labels would
     otherwise land on the same pixels -- the thing that makes Ultralytics' own
     val_batch previews unreadable.
+
+    `fields` selects what the label says: a dict of the LABEL_FIELDS keys to
+    bool, or None for all of them. With every field off, NO label is drawn at
+    all — not an empty box, which would still cover the pixels you turned the
+    label off to see. That is the point of the "none" setting: a figure for the
+    report wants the boxes and nothing else on top of a 160x120 image where a
+    label is wider than the thing it describes.
     """
+    if fields is None:
+        fields = {k: True for k, _ in LABEL_FIELDS}
     big = cv2.resize(rgb, (rgb.shape[1] * scale, rgb.shape[0] * scale),
                      interpolation=cv2.INTER_NEAREST)
     for d in dets:
@@ -374,11 +389,22 @@ def draw(rgb, dets, show_classes, scale):
         x1, y1, x2, y2 = (v * scale for v in d["xyxy"])
         col = COLOR.get(d["cls"], (255, 255, 255))
         cv2.rectangle(big, (int(x1), int(y1)), (int(x2), int(y2)), col, 2)
-        txt = f"{d['cls']} {d['conf']:.2f}  {d['w']:.1f}px"
-        if d["cls"] == "omega":
+
+        bits = []
+        if fields.get("cls"):
+            bits.append(d["cls"])
+        if fields.get("conf"):
+            bits.append(f"{d['conf']:.2f}")
+        if fields.get("size"):
+            bits.append(f"{d['w']:.1f}px")
+        if fields.get("range") and d["cls"] == "omega":
             rng = implied_range(d["w"])
             if rng:
-                txt += f"  ~{rng:.1f}m"
+                bits.append(f"~{rng:.1f}m")
+        txt = "  ".join(bits)
+        if not txt:
+            continue                      # boxes only — draw nothing on top
+
         (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
         above = d["cls"] == "omega"
         ly = max(th + 4, int(y1) - 5) if above else min(big.shape[0] - 4, int(y2) + th + 6)
@@ -405,6 +431,12 @@ class App:
         self.path = None
         self.dets = []
         self.show = "both"
+        # What each label says. Independent toggles rather than one cycling
+        # setting, because the useful combinations are not a sequence: range
+        # alone for a geometry figure, confidence alone for a threshold sweep,
+        # everything for debugging.
+        self.lbl = {k: tk.BooleanVar(value=True) for k, _ in LABEL_FIELDS}
+
         self.view = 0            # eye-render stretch, VIEWS index
         self.faces_on = False    # face-temperature overlay
         self.face_blobs = []
@@ -459,6 +491,12 @@ class App:
                                   pady=6, activebackground="#3a3a46",
                                   activeforeground=FG, highlightthickness=0, bd=0)
         self.view_btn.pack(side="left", padx=(8, 0))
+
+        self.lbl_btn = tk.Button(top, text="labels: full", command=self.label_menu,
+                                 bg="#2a2a33", fg=FG, relief="flat", padx=12,
+                                 pady=6, activebackground="#3a3a46",
+                                 activeforeground=FG, highlightthickness=0, bd=0)
+        self.lbl_btn.pack(side="left", padx=(8, 0))
 
         self.face_btn = tk.Button(top, text="faces: off", command=self.toggle_faces,
                                   bg="#2a2a33", fg=FG, relief="flat", padx=12,
@@ -524,6 +562,10 @@ class App:
         root.bind("<Command-o>", lambda e: self.browse())
         root.bind("v", lambda e: self.cycle_view())
         root.bind("f", lambda e: self.toggle_faces())
+        # l cycles full -> none -> full, for when you are flicking between a
+        # figure and a debugging view.
+        root.bind("l", lambda e: self.set_labels(
+            not all(v.get() for v in self.lbl.values())))
         # Cmd-S keeps its old meaning (write the overlay); Cmd-E opens the
         # full export menu. Both no-op harmlessly before a frame is loaded.
         root.bind("<Command-s>", lambda e: self.frame and self.export("overlay"))
@@ -552,6 +594,45 @@ class App:
         self.show = {"both": "person", "person": "omega", "omega": "both"}[self.show]
         self.cls_btn.config(text=f"classes: {self.show}")
         self.redraw()
+
+    def label_menu(self):
+        m = tk.Menu(self.root, tearoff=0, bg="#22222a", fg=FG,
+                    activebackground="#3a3a46", activeforeground=FG, bd=0,
+                    selectcolor=FG)
+        for key, text in LABEL_FIELDS:
+            m.add_checkbutton(label=text, variable=self.lbl[key],
+                              command=self.on_labels)
+        m.add_separator()
+        m.add_command(label="All  (full extended)",
+                      command=lambda: self.set_labels(True))
+        m.add_command(label="None  (boxes only)",
+                      command=lambda: self.set_labels(False))
+        try:
+            x = self.lbl_btn.winfo_rootx()
+            y = self.lbl_btn.winfo_rooty() + self.lbl_btn.winfo_height()
+            m.tk_popup(x, y)
+        finally:
+            m.grab_release()
+
+    def set_labels(self, on):
+        for v in self.lbl.values():
+            v.set(on)
+        self.on_labels()
+
+    def on_labels(self):
+        n = sum(v.get() for v in self.lbl.values())
+        if n == len(LABEL_FIELDS):
+            txt = "labels: full"
+        elif n == 0:
+            txt = "labels: none"
+        else:
+            txt = "labels: " + "+".join(k for k, _ in LABEL_FIELDS
+                                        if self.lbl[k].get())
+        self.lbl_btn.config(text=txt)
+        self.redraw()
+
+    def label_fields(self):
+        return {k: v.get() for k, v in self.lbl.items()}
 
     def cycle_view(self):
         self.view = (self.view + 1) % len(VIEWS)
@@ -715,7 +796,8 @@ class App:
         avail_w = max(320, self.canvas.winfo_width() or 760)
         avail_h = max(240, self.canvas.winfo_height() or 560)
         scale = max(1, int(min(avail_w / w, avail_h / h)))
-        big = draw(self.frame.eye_rgb, self.dets, self.show, scale)
+        big = draw(self.frame.eye_rgb, self.dets, self.show, scale,
+                   self.label_fields())
         if self.faces_on and self.face_blobs:
             big = big.copy()
             for (cx, cy, r, peak) in self.face_blobs:
@@ -823,7 +905,12 @@ class App:
         base = os.path.splitext(os.path.basename(self.path))[0]
 
         if kind == "overlay":
-            arr = draw(f.eye_rgb, self.dets, self.show, self.EXPORT_SCALE)
+            # The EXPORTED overlay must match what is on screen. Exporting
+            # full labels while the window shows boxes-only is how you end up
+            # with a figure nobody can read — and "none" exists precisely for
+            # figures, so this is the path that most needs to honour it.
+            arr = draw(f.eye_rgb, self.dets, self.show, self.EXPORT_SCALE,
+                       self.label_fields())
             suffix, ext, what = "_overlay", ".png", "overlay"
         elif kind == "clean_big":
             arr = cv2.resize(f.eye_rgb,
