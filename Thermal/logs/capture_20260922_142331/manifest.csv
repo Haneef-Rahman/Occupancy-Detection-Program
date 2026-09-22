@@ -1,0 +1,5 @@
+file,timestamp,view,background,threshold,n_det,omega_count,omega_score,flags,note
+cap_000000,2026-09-22T14:23:31.763,horizontal,,,0,18,0.8863,YOLO-omega,
+cap_000001,2026-09-22T14:23:36.330,horizontal,,,0,17,0.9080,YOLO-omega,
+cap_000002,2026-09-22T14:23:42.945,horizontal,,,0,14,0.9055,YOLO-omega,
+cap_000003,2026-09-22T14:23:46.688,horizontal,,,0,17,0.9147,YOLO-omega,
