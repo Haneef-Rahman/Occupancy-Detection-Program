@@ -10,6 +10,13 @@ EXPERIMENTAL. Annotate by pointing at people, not by drawing rectangles.
                          crosshair. Works at any time — the proposals stay
                          live, so you can click the two heads the model found
                          and draw the third it missed without changing mode.
+    DRAG a box           move one you already have. Only starts when there is
+                         no new proposal under the cursor, so accepting always
+                         wins over grabbing.
+    ctrl-C / ctrl-V      copy this frame's boxes, paste them onto another.
+                         For a cluster where everyone barely moved: paste,
+                         then drag the two or three that shifted. Paste APPENDS
+                         and skips exact duplicates.
     ENTER (picked none)  accept everything currently previewed, and move on
     ENTER (picked some)  commit exactly what you picked
     x                    commit EMPTY — nobody in this cluster
@@ -109,6 +116,14 @@ DIM_COL = (95, 95, 105)           # other proposals above the gate
 ARM_COL = (120, 220, 140)         # proposals ENTER is about to accept wholesale
 MANUAL_COL = (255, 120, 255)      # the box you are drawing by hand
 NEG_COL = (150, 150, 255)         # hard-negative banner
+
+# ctrl-C and ctrl-V arrive from HighGUI as the raw control codes 3 and 22.
+# Shift-C / shift-V are accepted as well: on the macOS Cocoa backend control
+# characters are not always delivered, and a copy key that silently does
+# nothing is worse than a second way to press it. Lower-case c and v are NOT
+# here — they are clear and contrast, and must keep working.
+COPY_KEYS = (3, ord("C"))
+PASTE_KEYS = (22, ord("V"))
 
 CONF_STEP = 0.01
 CONF_MIN, CONF_MAX = 0.01, 0.95
@@ -419,13 +434,56 @@ def main():
     # are on, so a keypress has somewhere unambiguous to land. It is also
     # steadier than clicking: on a trackpad, pressing the button moves the
     # pointer, and at 6x zoom that is most of a sensor pixel.
+    boxes = []            # the live list, mutated in place — see below
+    clipboard = []        # ctrl-C / ctrl-V between frames
+
     state = {"cursor": (0, 0), "click": False,
-             "first": None, "pending": None}
+             "first": None, "pending": None,
+             "drag": None,      # (index, off_x, off_y, w, h) while dragging
+             "cand_ok": False}  # is there a NEW proposal under the cursor?
+
+    def box_at(p):
+        """Index of the topmost accepted box containing p, or None."""
+        x, y = p
+        for i_ in range(len(boxes) - 1, -1, -1):   # newest first
+            _, x0, y0, x1, y1 = boxes[i_]
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                return i_
+        return None
 
     def on_mouse(ev, mx, my, flags, _):
-        state["cursor"] = (mx / args.scale, my / args.scale)
+        p = (mx / args.scale, my / args.scale)
+        state["cursor"] = p
+
         if ev == cv2.EVENT_LBUTTONDOWN:
-            state["click"] = True
+            # ACCEPTING A PROPOSAL WINS OVER STARTING A DRAG.
+            #
+            # In a crowd a proposal frequently overlaps a box you already
+            # accepted, and if drag took priority there you could never accept
+            # the second of two overlapping people — the click would grab the
+            # first box instead. So a click only becomes a drag when there is
+            # nothing new under the cursor to accept. cand_ok is computed once
+            # per redraw in the main loop and parked here.
+            if state["cand_ok"]:
+                state["click"] = True
+                return
+            hit = box_at(p)
+            if hit is None:
+                state["click"] = True
+                return
+            _, x0, y0, x1, y1 = boxes[hit]
+            state["drag"] = (hit, p[0] - x0, p[1] - y0, x1 - x0, y1 - y0)
+
+        elif ev == cv2.EVENT_MOUSEMOVE and state["drag"] is not None:
+            j, ox, oy, w, h = state["drag"]
+            if j < len(boxes):
+                nx, ny = p[0] - ox, p[1] - oy
+                boxes[j] = (OMEGA_CLASS, nx, ny, nx + w, ny + h)
+            else:
+                state["drag"] = None      # list shrank under us
+
+        elif ev in (cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONUP):
+            state["drag"] = None
 
     cv2.setMouseCallback(win, on_mouse)
 
@@ -440,6 +498,7 @@ def main():
             state["first"] = None
 
     conf = args.conf
+    view = [0]
     i = 0
     deleted = set()
     snapped_total = 0
@@ -455,25 +514,33 @@ def main():
         dets = infer(model, arr, args.floor, args.imgsz)
 
         hp = os.path.join(human_dir, rep["file"] + ".txt")
-        boxes = ([b for b in an.load_labels(hp, W, H) if b[0] == OMEGA_CLASS]
-                 if os.path.exists(hp) else [])
+        # MUTATED IN PLACE, NEVER REBOUND. The mouse callback holds a
+        # reference to this exact list so it can move a box under the cursor;
+        # rebinding it per cluster would leave the callback writing into the
+        # frame you just left. Every site below uses [:] / .clear() / .pop()
+        # for the same reason.
+        boxes[:] = ([b for b in an.load_labels(hp, W, H)
+                     if b[0] == OMEGA_CLASS] if os.path.exists(hp) else [])
 
         S = args.scale
         advance = None
         msg = ""
         state["first"] = None      # a half-drawn box never crosses a cluster
         state["pending"] = None
+        state["drag"] = None       # nor does a drag
         refreshed = set()      # coarse cells already given a second look
         while advance is None:
             cand = candidate(dets, conf, state["cursor"])
             dupe = cand is not None and already_have(boxes, cand)
+            # The callback fires between redraws and cannot recompute this.
+            state["cand_ok"] = bool(cand) and not dupe
 
             # what e/DEL would remove
             pad = DP.Pad()
             pad.boxes, pad.cursor = boxes, state["cursor"]
             doomed, how = pad.target()
 
-            vis = cv2.resize(TD.colorize(arr), None, fx=S, fy=S,
+            vis = cv2.resize(DP.colorize_view(arr, view[0]), None, fx=S, fy=S,
                              interpolation=cv2.INTER_NEAREST)
 
             above = [d for d in dets if d[4] >= conf]
@@ -501,8 +568,11 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.40, ARM_COL, 1,
                                 cv2.LINE_AA)
 
+            dragging = (state["drag"][0] if state["drag"] is not None
+                        else None)
             for bi, (_, x0, y0, x1, y1) in enumerate(boxes):
-                c = DOOMED_COL if bi == doomed else OMEGA_COL
+                c = (DOOMED_COL if bi == doomed
+                     else MANUAL_COL if bi == dragging else OMEGA_COL)
                 cv2.rectangle(vis, (int(x0 * S), int(y0 * S)),
                               (int(x1 * S), int(y1 * S)), c, 2)
                 if bi == doomed:
@@ -560,9 +630,10 @@ def main():
                         (220, 220, 230), 1, cv2.LINE_AA)
             mode_txt = ("SPACE sets the opposite corner   [first corner set]"
                         if state["first"] else "")
+            clip_txt = f"   clip {len(clipboard)}" if clipboard else ""
             cv2.putText(bar, f"accepted {len(boxes)}    gate {conf:.2f}  "
                              f"[ ]    proposals {n_above}/{len(dets)} "
-                             f"(floor {args.floor:.2f})",
+                             f"(floor {args.floor:.2f}){clip_txt}",
                         (12, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
                         OMEGA_COL, 1, cv2.LINE_AA)
 
@@ -589,9 +660,10 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.46, MANUAL_COL, 1,
                             cv2.LINE_AA)
 
-            hint = ("CLICK accept   SPACE x2 draw corners   e/DEL remove   "
-                    "r re-scan here   [ ] gate   u undo  c clear  x empty  "
-                    "g NEGATIVE  ENTER next  b back  d drop  q quit")
+            hint = ("CLICK accept / DRAG a box   SPACE x2 corners   "
+                    "^C copy  ^V paste   e/DEL remove   r re-scan   [ ] gate  "
+                    "v contrast   u undo  c clear  x empty  g NEGATIVE   "
+                    "ENTER next  b back  d drop  q quit")
             cv2.putText(bar, hint, (12, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
                         MANUAL_COL if state["first"] else (140, 140, 152), 1,
                         cv2.LINE_AA)
@@ -646,6 +718,31 @@ def main():
                 boxes.pop(doomed)
             elif k == ord(" "):
                 drop_corner()
+            elif k in COPY_KEYS:
+                clipboard[:] = [tuple(b) for b in boxes]
+                msg = (f"copied {len(clipboard)} boxes" if clipboard
+                       else "nothing to copy")
+            elif k in PASTE_KEYS:
+                if not clipboard:
+                    msg = "clipboard empty - ctrl-C on a frame first"
+                else:
+                    # APPEND, not replace. Pasting onto a frame you have
+                    # already started must not silently discard that work, and
+                    # "paste then delete the two that do not fit" is the whole
+                    # workflow this exists for. Exact duplicates are skipped so
+                    # a double press cannot stack boxes invisibly on top of
+                    # each other.
+                    have = {tuple(b) for b in boxes}
+                    added = [b for b in clipboard if tuple(b) not in have]
+                    boxes.extend(added)
+                    msg = (f"pasted {len(added)} of {len(clipboard)}"
+                           + ("  (drag to nudge)" if added
+                              else "  - already here"))
+            elif k == ord("v"):
+                # Display only — the model still sees render_for_cnn at SPAN_C,
+                # so changing this cannot change what it proposes.
+                view[0] = (view[0] + 1) % len(DP.VIEWS)
+                msg = f"view: {DP.VIEWS[view[0]][0]}"
             elif k == ord("m"):
                 # There WAS an m here for one revision, as a mode toggle. It
                 # was the wrong design — it took the mouse button away from the
@@ -662,7 +759,7 @@ def main():
                 elif boxes:
                     boxes.pop()
             elif k == ord("c"):
-                boxes = []
+                boxes.clear()
                 state["first"] = None
             elif k in (13, 10, ord("n")):
                 if arming:
@@ -674,7 +771,7 @@ def main():
                     advance = ("commit", [(OMEGA_CLASS, d[0], d[1], d[2], d[3])
                                           for d in above])
                 else:
-                    advance = ("commit", boxes)
+                    advance = ("commit", list(boxes))
             elif k == ord("x"):
                 advance = ("commit", [])
             elif k == ord("g"):
