@@ -6,7 +6,8 @@ Record a capture log with YOLO omega labels and nothing else.
     python3 dataset_recording.py --conf 0.40
     python3 dataset_recording.py --weights models/v1/best.pt   # pin an old one
 
-    r        start / stop recording
+    r        start / stop recording (continuous)
+    s        take ONE frame — a deliberate sample, not a stream
     q, ESC   quit
 
 WHY OMEGA ONLY. The person box and the omega box are different targets, and
@@ -142,7 +143,7 @@ def draw(data, omegas, S, recording, n_frames, conf, capture_name):
         cv2.putText(vis, txt, (vis.shape[1] - 28 - tw, 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.46, (80, 80, 255), 1, cv2.LINE_AA)
     else:
-        hint = "r = record"
+        hint = "r = record    s = one shot"
         (tw, _), _ = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.46, 1)
         cv2.putText(vis, hint, (vis.shape[1] - 10 - tw, 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.46, (140, 140, 150), 1,
@@ -271,7 +272,7 @@ def main():
 
     cam = open_camera(args)
     print(f"conf:  {args.conf}   omega only, class {OMEGA_CLASS}")
-    print("r = record, q = quit")
+    print("r = record (continuous),  s = take ONE frame,  q = quit")
 
     win = "dataset recording"
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
@@ -281,6 +282,24 @@ def main():
     frame_i = 0
     cap_dir = cap_fh = cap_w = None
     finished = []
+
+    # MANUAL SHOTS. A separate capture, opened on the first `s` and appended to
+    # for the rest of the session.
+    #
+    # WHY NOT JUST RECORD. At 9 fps a 30-second run is 270 frames of very
+    # nearly the same picture — measured on capture_20260921_100706, 247 frames
+    # collapsed to a first-vs-last difference of 0.415, i.e. one scene. The
+    # dataset does not need frames, it needs SCENES, and the cost of a frame is
+    # not disk, it is the minute you spend annotating it. One deliberate press
+    # per genuinely different arrangement beats a continuous run and then
+    # throwing 95% of it away in triage.
+    #
+    # Kept apart from the `r` captures so a folder is either "a run" or "shots"
+    # and never a mix, which matters because triage clusters on frame-to-frame
+    # similarity and consecutive shots are unrelated by construction.
+    shot_dir = shot_fh = shot_w = None
+    n_shots = 0
+    flash = 0
 
     try:
         while True:
@@ -298,12 +317,45 @@ def main():
             frame_i += 1
 
             name = os.path.basename(cap_dir) if cap_dir else ""
-            cv2.imshow(win, draw(data, omegas, args.scale, recording, n,
-                                 args.conf, name))
+            vis = draw(data, omegas, args.scale, recording, n, args.conf, name)
+
+            if n_shots:
+                cv2.putText(vis, f"shots {n_shots}", (8, vis.shape[0] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.46, (120, 220, 140), 1,
+                            cv2.LINE_AA)
+            if flash:
+                # A press that produced nothing visible is a press you repeat,
+                # and duplicates are the one thing manual shots exist to avoid.
+                cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, vis.shape[0] - 1),
+                              (255, 255, 255), 3)
+                flash -= 1
+
+            cv2.imshow(win, vis)
 
             k = cv2.waitKey(1) & 0xFF
             if k in (ord("q"), 27):
                 break
+            if k == ord("s"):
+                if recording:
+                    # Already writing this frame stream — just force this one
+                    # out regardless of --capture-every.
+                    write_frame(cap_dir, cap_w, n, data, omegas, args.note,
+                                args.no_review)
+                    n += 1
+                    flash = 3
+                    print(f"  shot -> {os.path.basename(cap_dir)} "
+                          f"frame {n - 1}")
+                else:
+                    if shot_dir is None:
+                        shot_dir, shot_fh, shot_w = open_capture(
+                            (args.note + "  [manual shots]").strip(),
+                            args.conf, weights)
+                        print(f"manual shots -> {shot_dir}")
+                    write_frame(shot_dir, shot_w, n_shots, data, omegas,
+                                args.note, args.no_review)
+                    n_shots += 1
+                    flash = 3
+                    print(f"  shot {n_shots} -> {os.path.basename(shot_dir)}")
             if k == ord("r"):
                 if not recording:
                     cap_dir, cap_fh, cap_w = open_capture(args.note, args.conf,
@@ -318,6 +370,10 @@ def main():
                     print(f"stopped: {n} frames in {cap_dir}")
                     cap_dir = cap_fh = cap_w = None
     finally:
+        if shot_fh:
+            shot_fh.close()
+            finished.append((shot_dir, n_shots))
+            print(f"manual shots: {n_shots} frames in {shot_dir}")
         if recording and cap_fh:
             cap_fh.close()
             finished.append((cap_dir, n))
