@@ -284,9 +284,11 @@ def main():
     ap.add_argument("--min-score", type=float, default=None,
                     help="skip anything scoring at or above this, e.g. 0.20")
     ap.add_argument("--skip-drawn", action="store_true",
-                    help="with --frames, omit the one frame per cluster you "
-                         "actually drew on, leaving only the propagated "
-                         "copies. 3726 -> 3295 on capture_20260824_152959.")
+                    help="with --frames, omit the frames you actually drew on, "
+                         "leaving only the propagated copies. Your hand labels "
+                         "are ground truth; this tool scores box-vs-blob "
+                         "overlap and has no business grading them. "
+                         "3726 -> 3295 on capture_20260824_152959.")
     ap.add_argument("--no-miss", action="store_true",
                     help="disable MISS detection and rank by IoU alone. The "
                          "MISS check is the noisy half of this tool: it fires "
@@ -346,19 +348,36 @@ def main():
     if args.frames:
         items = sorted(scored, key=lambda d: d["score"])
         if args.skip_drawn:
-            # The representative is the frame annotate.py opened and you drew
-            # on, picked the same way it picks: fewest person boxes, first one
-            # wins a tie, in triage.csv row order. Re-deriving it here rather
-            # than storing it keeps the two files from disagreeing.
+            # PREFER THE RECORD OVER THE INFERENCE.
+            #
+            # dataset_pipeline.commit() writes representatives.txt at the
+            # moment it saves a hand-drawn frame, so that file is a fact. The
+            # fallback below re-derives it with annotate.py's rule — fewest
+            # person boxes, first wins a tie — which is NOT what
+            # dataset_pipeline/annotate_live do (they take members[0]
+            # unconditionally). The two agree on every capture this project
+            # records, because dataset_recording.py writes no person boxes and
+            # min() then returns the first element; they diverge on a merge
+            # containing older captures that do. When they diverge, the
+            # inference hides a propagated frame and shows you one you drew,
+            # which is precisely backwards.
             drawn = set()
-            if os.path.exists(tri):
+            rep_file = os.path.join(root, "representatives.txt")
+            if os.path.exists(rep_file):
+                drawn = {ln.strip() for ln in open(rep_file) if ln.strip()}
+                print(f"  --skip-drawn: {len(drawn)} representatives from "
+                      f"representatives.txt")
+            elif os.path.exists(tri):
                 per = collections.OrderedDict()
                 for r in csv.DictReader(open(tri)):
                     per.setdefault(int(r["cluster"]), []).append(r)
                 for c, mem in per.items():
                     drawn.add(min(mem, key=lambda r: int(r["n_person"]))["file"])
+                print(f"  --skip-drawn: no representatives.txt, inferred "
+                      f"{len(drawn)} from triage.csv")
             if not drawn:
-                print("  --skip-drawn needs triage.csv; nothing skipped")
+                print("  --skip-drawn: no representatives.txt and no "
+                      "triage.csv; nothing skipped")
             before = len(items)
             items = [d for d in items if d["file"] not in drawn]
             print(f"  --skip-drawn: {before} -> {len(items)} "
