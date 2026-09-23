@@ -263,3 +263,6 @@ libuvc/
 #
 # logs/capture_* is untouched.
 Thermal/logs/merged_*/
+
+# RGB 4 Thermal
+RGB_4_Thermal/
