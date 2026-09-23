@@ -46,7 +46,17 @@ if [ $# -gt 0 ]; then shift; fi
 echo "running: $SCRIPT $*  (as root, via $VENV_PY)"
 sudo "$VENV_PY" "$HERE/$SCRIPT" "$@"
 
-# Captured logs are written as root; hand them back to the user.
-if [ -d "$HERE/logs" ]; then
-    sudo chown -R "$(id -u):$(id -g)" "$HERE/logs" 2>/dev/null || true
-fi
+# Everything written under sudo comes out root-owned. This used to chown only
+# logs/, which left datasets/ unreadable — git refused to add 4600 files on
+# 2026-09-23 with "Permission denied". Tools also fix this themselves now
+# (dataset_pipeline.hand_back, merge_datasets.hand_back); this is the backstop
+# for any tool that forgets, and for runs that die before their own cleanup.
+#
+# u+rwX not just chown: shutil.copy2 preserves the SOURCE mode, so a 0600 file
+# copied by root stays 0600 even once you own it.
+for d in logs datasets models; do
+    if [ -d "$HERE/$d" ]; then
+        sudo chown -R "$(id -u):$(id -g)" "$HERE/$d" 2>/dev/null || true
+        sudo chmod -R u+rwX "$HERE/$d" 2>/dev/null || true
+    fi
+done

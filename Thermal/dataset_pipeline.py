@@ -347,13 +347,147 @@ def choose(rows):
         for i in pick:
             print(f"    {i:>3}  {usable[i]['name']}  ({usable[i]['n']})")
         if input("  ok? [Y/n]: ").strip().lower() in ("", "y", "yes"):
-            return [usable[i] for i in pick]
+            sel = [usable[i] for i in pick]
+            # ask_ratio can DROP captures (0 = skip), so it returns the
+            # selection too — returning only the quota would leave merge()
+            # copying a capture you just said you did not want.
+            return ask_ratio(sel)
+
+
+WIN_RATIO = "capture preview"
+
+
+def show_frame(r, idx, total_caps, seed=None):
+    """
+    Put one RANDOM frame from this capture on screen and leave it there.
+
+    Random rather than frame 0: frame 0 is the instant the recorder started,
+    which is routinely somebody's hand leaving the mount — the least
+    representative frame in the session.
+
+    The window has to stay visible while you type in the TERMINAL, and OpenCV
+    only repaints inside waitKey. So we pump it a few times to force a paint
+    and then return; the window stays up until the next call replaces it.
+    Without the pump the window is a grey rectangle on macOS.
+
+    Returns the stem shown, or None if there is no display.
+    """
+    frames, _ = frame_paths(r["dir"])
+    if not frames:
+        return None
+    f = random.Random(seed).choice(frames)
+    arr = np.load(f)
+
+    vis = cv2.resize(colorize_view(arr, 1), None, fx=5, fy=5,
+                     interpolation=cv2.INTER_NEAREST)
+    bar = np.full((52, vis.shape[1], 3), 16, np.uint8)
+    cv2.putText(bar, f"[{idx}/{total_caps}]  {r['name']}", (10, 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 230), 1, cv2.LINE_AA)
+    cv2.putText(bar, f"{r['n']} frames   showing "
+                     f"{os.path.splitext(os.path.basename(f))[0]}", (10, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.44, (140, 140, 152), 1,
+                cv2.LINE_AA)
+    try:
+        cv2.namedWindow(WIN_RATIO, cv2.WINDOW_AUTOSIZE)
+        cv2.imshow(WIN_RATIO, np.vstack([vis, bar]))
+        for _ in range(6):
+            cv2.waitKey(20)
+        return os.path.splitext(os.path.basename(f))[0]
+    except Exception:
+        return None
+
+
+def ask_ratio(sel):
+    """
+    Walk the selected captures one at a time and take a count for each.
+
+    WHY PER CAPTURE AND NOT ONE GLOBAL RATIO. The right number is a property of
+    the SCENE, and you cannot know it from the frame count. A lecture hall with
+    thirty people is worth taking a lot of; a static corridor recorded for four
+    minutes is one scene recorded 2000 times and two dozen frames cover it.
+    Measured on capture_20260921_100706: 247 consecutive frames differed from
+    first to last by 0.415, so a proportional split would have spent most of
+    the budget on near-duplicates. Looking at the frame is what tells you.
+
+    Returns (sel, take) with skipped captures removed from BOTH, or
+    (sel, None) if every capture was taken whole.
+    """
+    print(f"\n{len(sel)} captures, {sum(r['n'] for r in sel)} frames total")
+    print("  For each one: a window opens with a random frame from it.")
+    print("  Enter how many frames to take. Blank = all, 0 = skip it,")
+    print("  r = show a different random frame, q = stop asking (rest all).")
+
+    take = {}
+    keep = []
+    i = 0
+    while i < len(sel):
+        r = sel[i]
+        shown = show_frame(r, i + 1, len(sel))
+        if shown is None:
+            print(f"\n  [{i + 1}/{len(sel)}] {r['name']}  "
+                  f"({r['n']} frames)   (no display)")
+
+        try:
+            raw = input(f"\n  [{i + 1}/{len(sel)}] {r['name']}  "
+                        f"{r['n']} frames -> how many? "
+                        f"[{r['n']}=all, 0=skip, r=reroll]: ").strip()
+        except EOFError:
+            raw = "q"
+
+        if raw.lower() == "r":
+            continue                       # same capture, new random frame
+        if raw.lower() == "q":
+            for rest in sel[i:]:
+                keep.append(rest)
+                take[rest["name"]] = rest["n"]
+            break
+
+        if not raw:
+            k = r["n"]
+        else:
+            try:
+                k = (int(round(r["n"] * float(raw.rstrip("%")) / 100.0))
+                     if raw.endswith("%") else int(raw))
+            except ValueError:
+                print("    a number, a percentage like 30%, blank, 0, or r")
+                continue
+        k = max(0, min(k, r["n"]))
+
+        if k == 0:
+            print(f"    skipped")
+        else:
+            keep.append(r)
+            take[r["name"]] = k
+            every = r["n"] / k
+            print(f"    {k} of {r['n']}"
+                  + (f"  (every {every:.1f} frames)" if k < r["n"] else "  (all)"))
+        i += 1
+
+    try:
+        cv2.destroyWindow(WIN_RATIO)
+    except Exception:
+        pass
+
+    if not keep:
+        sys.exit("every capture skipped — nothing to merge")
+
+    total = sum(take[r["name"]] for r in keep)
+    print(f"\n  {len(keep)} captures, {total} frames:")
+    for r in keep:
+        k = take[r["name"]]
+        print(f"    {r['name']:<34} {k:>5} of {r['n']}")
+    if input("\n  ok? [Y/n]: ").strip().lower() not in ("", "y", "yes"):
+        return ask_ratio(sel)
+
+    if all(take[r["name"]] == r["n"] for r in keep) and len(keep) == len(sel):
+        return keep, None                  # nothing subsampled, nothing skipped
+    return keep, take
 
 
 # ---------------------------------------------------------------------------
 # 2. Merge
 # ---------------------------------------------------------------------------
-def merge(sel):
+def merge(sel, take=None):
     """
     Concatenate into one working directory with sequential stems.
 
@@ -366,6 +500,21 @@ def merge(sel):
     SEQUENTIALLY, so the order here becomes the cluster structure: frames from
     different sessions must not interleave, or triage will group across a scene
     change.
+
+    `take` is {capture name: count} from ask_ratio(), or None for everything.
+    Subsampling is EVENLY SPACED across each capture's whole duration, not a
+    contiguous block and not random:
+
+      * a block would keep one stretch of one scene and discard the rest of the
+        session, which is the opposite of why you are subsampling;
+      * random would lose the temporal ORDER that triage needs — it clusters
+        sequentially, so shuffled input produces meaningless clusters.
+
+    A stride keeps the order, spans the whole session, and makes consecutive
+    kept frames less similar — which means more clusters and less propagation,
+    but propagation was already doing badly on dense scenes (93% of propagated
+    frames rejected in review on merged_20260921_150124). Diversity per
+    annotated frame is the thing worth buying.
     """
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = os.path.join(LOG_DIR, f"merged_{stamp}")
@@ -386,6 +535,22 @@ def merge(sel):
                 for row in csv.DictReader(fh):
                     man[row["file"]] = row
         frames, _ = frame_paths(d)
+        k = None if take is None else take.get(r["name"])
+        if k is not None and k < len(frames):
+            if k == 1:
+                # ONE frame means the MIDDLE one, not frame 0. Frame 0 is the
+                # instant the recorder started, which is routinely somebody's
+                # hand leaving the mount — the single least representative
+                # frame in the session.
+                idx = [len(frames) // 2]
+            else:
+                # linspace over the CLOSED range so the first and last frames
+                # of the session are both kept; rounding can collide on short
+                # captures, so dedupe while preserving order.
+                idx = sorted(set(int(round(v)) for v in
+                                 np.linspace(0, len(frames) - 1, k)))
+            frames = [frames[i] for i in idx]
+
         for npy in frames:
             old = os.path.splitext(os.path.basename(npy))[0]
             new = f"cap_{n:06d}"
@@ -401,7 +566,12 @@ def merge(sel):
                 row["file"] = new
                 man_rows.append(row)
             n += 1
-        print(f"  merged {r['name']}  ->  {n} frames total")
+        if k is not None and k < r["n"]:
+            print(f"  merged {r['name']}  ({len(frames)} of {r['n']}, "
+                  f"every {r['n'] / max(1, len(frames)):.1f})  ->  "
+                  f"{n} frames total")
+        else:
+            print(f"  merged {r['name']}  ->  {n} frames total")
 
     with open(os.path.join(out, "classes.txt"), "w") as fh:
         fh.write("person\nhead_shoulder\n")
@@ -1261,9 +1431,9 @@ def main():
         rows = list_captures()
         if not rows:
             sys.exit(f"no capture logs in {LOG_DIR}")
-        sel = choose(rows)
+        sel, take = choose(rows)
         print("\n" + "=" * 60 + "\nSTAGE 2  merge\n" + "=" * 60)
-        root = merge(sel)
+        root = merge(sel, take)
         hand_back(root)
         save_state(root, live=args.live)
 

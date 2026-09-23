@@ -45,6 +45,7 @@ import collections
 import glob
 import os
 import shutil
+import stat
 import sys
 
 SPLITS = ("train", "val")
@@ -102,6 +103,49 @@ def survey(root):
     yml = glob.glob(os.path.join(root, "*.yaml"))
     info["names"] = read_yaml_names(yml[0]) if yml else {}
     return info
+
+
+def hand_back(path):
+    """
+    Return anything written under sudo to the invoking user.
+
+    run.sh launches EVERY tool under sudo — the macOS kernel UVC driver claims
+    the camera, so libusb needs privileges — and afterwards it chowns logs/.
+    Only logs/. A dataset built here lands in datasets/, which it never
+    touched, so the files came out root-owned at mode 0600 and the next
+    non-sudo thing to look at them failed:
+
+        error: open("Thermal/datasets/v5/train/images/...png"): Permission denied
+        fatal: Unable to process path ...
+
+    That was git, on 2026-09-23, refusing to add 4600 files it could not read.
+    dataset_pipeline.py already does this; this tool did not, which is why
+    stage 7 output was fine and merged output was not.
+
+    Also forces u+rw, because shutil.copy2 preserves the SOURCE mode — so a
+    0600 file copied by root stays 0600 even after the chown.
+    """
+    if os.geteuid() != 0:
+        return
+    uid = os.environ.get("SUDO_UID")
+    if not uid:
+        return
+    uid, gid = int(uid), int(os.environ.get("SUDO_GID") or uid)
+    n = 0
+    for root_, dirs, files in os.walk(path):
+        for p_ in [root_] + [os.path.join(root_, f) for f in dirs + files]:
+            try:
+                os.chown(p_, uid, gid)
+                mode = os.stat(p_).st_mode
+                want = stat.S_IMODE(mode) | stat.S_IRUSR | stat.S_IWUSR
+                if os.path.isdir(p_):
+                    want |= stat.S_IXUSR
+                os.chmod(p_, want)
+                n += 1
+            except OSError:
+                pass
+    if n:
+        print(f"handed {n} paths back to uid {uid}")
 
 
 def main():
@@ -277,6 +321,7 @@ def main():
     print(f"\nwrote {n_img} images, {n_box} boxes -> {args.out}")
     print(f"      {args.out}/fluxnet.yaml")
     print(f"      {args.out}/SOURCES.txt   (provenance)")
+    hand_back(args.out)
 
 
 if __name__ == "__main__":
