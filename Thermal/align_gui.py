@@ -34,6 +34,7 @@ WHAT WILL STILL BE WRONG, AND IS NOT A BUG.
 """
 
 import argparse
+import json
 import os
 import sys
 import traceback
@@ -59,6 +60,52 @@ BG = "#16161a"
 FG = "#e8e8ec"
 MUTED = "#8b8b96"
 
+# ---------------------------------------------------------------------------
+# The calibrated rig, 2026-09-23
+# ---------------------------------------------------------------------------
+# Solved by Auto from 7 thermal + 15 visible detections -> 5 pairs, then
+# hand-checked. 1.12 thermal px RMS on a 160x120 sensor where a head is 4-15 px
+# across, with the Sony at 4864x3648.
+#
+# THESE FOUR ARE PROPERTIES OF THE RIG, not of the scene, so they are reusable
+# on every future pair of frames — until something physically moves. Re-run
+# Auto and re-pin if you remount either camera, change the ZV-1's zoom, or
+# swap the lens.
+#
+# hfov landing at 69.4 rather than the 67.4 predicted for a 4:3 crop is worth
+# noting: 2 degrees wider than the sensor-geometry estimate. Either the zoom
+# was not quite at the wide stop, or Sony's stated 35mm-equivalent is
+# approximate. The measured number wins.
+#
+# WHAT IS NOT REUSABLE: the point pairs, and therefore the deformation itself.
+# Parallax depends on where people are standing, so the spline has to be
+# re-derived per scene — press Auto. morph strength and smoothing ARE saved,
+# because they say how much to trust that spline, which is a preference.
+DEFAULTS = {
+    "hfov": 69.4,
+    "yaw": 0.37,
+    "pitch": 2.59,
+    "roll": 1.69,
+    "morph": 0.56,
+    "smooth": 5.4,          # lam = 10^5.4, heavy: a gentle nudge, not a snap
+    "alpha": 0.50,
+}
+DEFAULTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "align_defaults.json")
+
+
+def load_defaults():
+    """Built-ins, overridden by align_defaults.json if you have re-pinned."""
+    d = dict(DEFAULTS)
+    try:
+        if os.path.exists(DEFAULTS_PATH):
+            d.update({k: float(v) for k, v in
+                      json.load(open(DEFAULTS_PATH)).items() if k in DEFAULTS})
+    except Exception:
+        pass
+    return d
+
+
 THERMAL_EXT = (".npy",)
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp")
 
@@ -73,6 +120,15 @@ class App:
         self.arr = None            # the Lepton frame, degrees C
         self.arr_path = None
         self.mode = "blend"
+
+        # Hand-clicked correspondences. Stored as
+        #   ((tx, ty) in THERMAL OUTPUT-GRID px, (vx, vy) in ORIGINAL Sony px)
+        # so they stay valid when SCALE changes and when the sliders move.
+        self.pairs = []
+        self.pending_t = None
+        self.pending_v = None
+        self.picking = False
+        self.coco_weights = args.coco
 
         root.title("Thermal / visible alignment")
         root.configure(bg=BG)
@@ -92,6 +148,13 @@ class App:
                                                               padx=(8, 0))
         self.mode_btn = btn(top, "view: blend", self.cycle_mode)
         self.mode_btn.pack(side="left", padx=(16, 0))
+        self.pick_btn = btn(top, "points: off", self.toggle_pick)
+        self.pick_btn.pack(side="left", padx=(16, 0))
+        self.auto_btn = btn(top, "Auto", self.do_auto, state="disabled")
+        self.auto_btn.pack(side="left", padx=(8, 0))
+        self.fit_btn = btn(top, "Fit", self.do_fit, state="disabled")
+        self.fit_btn.pack(side="left", padx=(8, 0))
+
         self.save_btn = btn(top, "Export ▾", self.export_menu, state="disabled")
         self.save_btn.pack(side="left", padx=(8, 0))
         btn(top, "Reset", self.reset_params).pack(side="left", padx=(8, 0))
@@ -109,7 +172,11 @@ class App:
                 ("alpha", "thermal opacity", 0.0, 1.0, args.alpha, "{:.2f}"),
                 ("yaw", "yaw", -20.0, 20.0, args.yaw, "{:+.2f}°"),
                 ("pitch", "pitch", -20.0, 20.0, args.pitch, "{:+.2f}°"),
-                ("roll", "roll", -20.0, 20.0, args.roll, "{:+.2f}°"))):
+                ("roll", "roll", -20.0, 20.0, args.roll, "{:+.2f}°"),
+                ("morph", "morph strength", 0.0, 1.0,
+                 load_defaults()["morph"], "{:.2f}"),
+                ("smooth", "morph smoothing", 0.0, 6.0,
+                 load_defaults()["smooth"], "1e{:.1f}"))):
             r, c = divmod(i, 2)
             cell = tk.Frame(grid, bg=BG)
             cell.grid(row=r, column=c, sticky="we", padx=(0, 18), pady=2)
@@ -137,6 +204,20 @@ class App:
             font=("Helvetica", 15))
         self.canvas.pack(side="left", fill="both", expand=True)
 
+        # Picking needs both images in their OWN geometry, side by side: the
+        # thermal in its output grid, and the Sony UNWARPED. A correspondence
+        # clicked on the warped photo would be a correspondence to whatever the
+        # current (wrong) parameters happen to say, which is circular.
+        self.pick_frame = tk.Frame(body, bg=BG)
+        self.t_pane = tk.Label(self.pick_frame, bg="#0e0e12", fg=MUTED,
+                               text="thermal")
+        self.t_pane.pack(side="left", fill="both", expand=True)
+        self.v_pane = tk.Label(self.pick_frame, bg="#0e0e12", fg=MUTED,
+                               text="visible (unwarped)")
+        self.v_pane.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        self.t_pane.bind("<Button-1>", self.click_thermal)
+        self.v_pane.bind("<Button-1>", self.click_visible)
+
         side = tk.Frame(body, bg=BG, width=300)
         side.pack(side="right", fill="y", padx=(12, 0))
         side.pack_propagate(False)
@@ -155,6 +236,11 @@ class App:
 
         root.bind("<Command-o>", lambda e: self.browse("vis"))
         root.bind("m", lambda e: self.cycle_mode())
+        root.bind("p", lambda e: self.toggle_pick())
+        root.bind("f", lambda e: self.do_fit())
+        root.bind("a", lambda e: self.do_auto())
+        root.bind("<BackSpace>", self.undo_point)
+        root.bind("<Escape>", self.clear_points)
 
     # ---------------------------------------------------------------- state
     def _ready(self):
@@ -169,9 +255,11 @@ class App:
         self.root.update_idletasks()
 
     def reset_params(self):
-        for k, v in (("hfov", 67.4), ("alpha", 0.5), ("yaw", 0.0),
-                     ("pitch", 0.0), ("roll", 0.0)):
-            self.var[k].set(v)
+        # Back to the PINNED rig, not to zeros. Zeros are not a neutral
+        # starting point here, they are a wrong one.
+        for k, v in load_defaults().items():
+            if k in self.var:
+                self.var[k].set(v)
         self.redraw()
 
     def cycle_mode(self):
@@ -179,6 +267,232 @@ class App:
                      "visible": "blend"}[self.mode]
         self.mode_btn.config(text=f"view: {self.mode}")
         self.redraw()
+
+    # -------------------------------------------------------------- points
+    PANE_W = 520
+
+    def toggle_pick(self):
+        self.picking = not self.picking
+        self.pick_btn.config(text=f"points: {'on' if self.picking else 'off'}")
+        if self.picking:
+            self.canvas.pack_forget()
+            self.pick_frame.pack(side="left", fill="both", expand=True)
+        else:
+            self.pick_frame.pack_forget()
+            self.canvas.pack(side="left", fill="both", expand=True)
+        self.redraw()
+
+    def click_thermal(self, ev):
+        if self.arr is None:
+            return
+        self.pending_t = (ev.x / self._t_disp, ev.y / self._t_disp)
+        self._maybe_pair()
+
+    def click_visible(self, ev):
+        if self.vis is None:
+            return
+        self.pending_v = (ev.x / self._v_disp, ev.y / self._v_disp)
+        self._maybe_pair()
+
+    def _maybe_pair(self):
+        """A pair completes when BOTH sides have a pending click."""
+        if self.pending_t is not None and self.pending_v is not None:
+            self.pairs.append((self.pending_t, self.pending_v))
+            self.pending_t = self.pending_v = None
+            self.set_status(f"{len(self.pairs)} pairs — click the same head "
+                            f"on both sides")
+        self.fit_btn.config(state="normal" if len(self.pairs) >= 2
+                            else "disabled")
+        self.redraw()
+
+    def undo_point(self, _=None):
+        if self.pending_t or self.pending_v:
+            self.pending_t = self.pending_v = None
+        elif self.pairs:
+            self.pairs.pop()
+        self._maybe_pair()
+
+    def clear_points(self, _=None):
+        self.pairs.clear()
+        self.pending_t = self.pending_v = None
+        self._maybe_pair()
+
+    def live_residuals(self, ow, oh):
+        """
+        Error at each control point AS CURRENTLY DISPLAYED — model plus morph.
+
+        Reporting the model-only residual while the screen shows a morphed
+        image would be reporting a different picture from the one you are
+        looking at.
+        """
+        res = AV.residuals(self.pairs, ow, oh, self.vis.shape, self.params())
+        st = self.var["morph"].get()
+        if st <= 0:
+            return res
+        lam = 0.0 if self.var["smooth"].get() <= 0 \
+            else 10.0 ** self.var["smooth"].get()
+        f = AV.residual_field(self.pairs, ow, oh, self.vis.shape,
+                              self.params(), lam=lam)
+        if f is None:
+            return res
+        out = []
+        for i, ((tx, ty), (vx, vy)) in enumerate(self.pairs):
+            d = AV.therm_px_to_dir(tx, ty, ow, oh)
+            u, v = AV.dir_to_vis_px(d, self.vis.shape, **self.params())
+            xi, yi = int(round(tx)), int(round(ty))
+            if 0 <= yi < oh and 0 <= xi < ow:
+                u += st * f[0][yi, xi]
+                v += st * f[1][yi, xi]
+            out.append(np.hypot(u - vx, v - vy))
+        return np.array(out)
+
+    # Where the HEAD sits inside each detector's box, as a fraction of box
+    # height from the top. The two detectors do not frame the same thing:
+    #
+    #   omega  = head AND shoulders, so the head centre is about a third down
+    #   person = the whole body, so the head is in the top tenth
+    #
+    # Getting these wrong does not break the fit — a constant offset is
+    # absorbed as pitch — but it does put the control points somewhere other
+    # than the heads, and the spline then deforms around the wrong anchors.
+    HEAD_FRAC_OMEGA = 0.35
+    HEAD_FRAC_PERSON = 0.10
+
+    def detect_thermal(self):
+        """Head points in THERMAL OUTPUT-GRID coordinates, via your own model."""
+        from ultralytics import YOLO
+        from model_registry import resolve_weights
+        import dataset_pipeline as DP
+        w = resolve_weights(None, quiet=True)
+        img = AV.TD.render_for_cnn(self.arr) if hasattr(AV.TD, "render_for_cnn") \
+            else cv2.merge([np.clip(
+                (self.arr - DP.SPAN_C[0]) /
+                (DP.SPAN_C[1] - DP.SPAN_C[0]) * 255, 0, 255
+            ).astype(np.uint8)] * 3)
+        res = YOLO(w).predict(img, verbose=False, conf=0.25, imgsz=640)[0]
+        pts = []
+        for (x0, y0, x1, y1), c in zip(
+                res.boxes.xyxy.cpu().numpy(),
+                res.boxes.cls.cpu().numpy().astype(int)):
+            if c != DP.OMEGA_CLASS:
+                continue
+            # boxes come back in the SOURCE image's pixels (160x120), so scale
+            # to the output grid the pairs are stored in
+            cx = (x0 + x1) / 2.0 * self.SCALE
+            cy = (y0 + (y1 - y0) * self.HEAD_FRAC_OMEGA) * self.SCALE
+            pts.append((cx, cy))
+        return pts
+
+    def detect_visible(self, weights="yolo11n.pt"):
+        """Head points in ORIGINAL Sony pixels, via a COCO person detector."""
+        from ultralytics import YOLO
+        res = YOLO(weights).predict(self.vis, verbose=False, conf=0.35,
+                                    imgsz=1280)[0]
+        names = res.names
+        pts = []
+        for (x0, y0, x1, y1), c in zip(
+                res.boxes.xyxy.cpu().numpy(),
+                res.boxes.cls.cpu().numpy().astype(int)):
+            if names.get(c, "") != "person":
+                continue
+            cx = (x0 + x1) / 2.0
+            cy = y0 + (y1 - y0) * self.HEAD_FRAC_PERSON
+            pts.append((float(cx), float(cy)))
+        return pts
+
+    def do_auto(self):
+        """Detect in both, match, fit, and leave the pairs for you to edit."""
+        if self.vis is None or self.arr is None:
+            return
+        self.set_status("detecting …")
+        try:
+            tp = self.detect_thermal()
+            vp = self.detect_visible(self.coco_weights)
+        except Exception as e:
+            traceback.print_exc()
+            messagebox.showerror(
+                "Auto failed",
+                f"{e}\n\nNeeds ultralytics, a model in models/vN/best.pt for "
+                f"the thermal side, and a COCO model for the visible side "
+                f"(downloads on first use).")
+            self.set_status(self._ready())
+            return
+
+        if len(tp) < 2 or len(vp) < 2:
+            self.set_status(f"only {len(tp)} thermal / {len(vp)} visible "
+                            f"detections — need 2 of each. Click them by hand.")
+            return
+
+        ow, oh = AV.LEPTON_W * self.SCALE, AV.LEPTON_H * self.SCALE
+        pairs, got, hist = AV.auto_align(tp, vp, ow, oh, self.vis.shape)
+        if len(pairs) < 2:
+            self.set_status(f"{len(tp)} thermal, {len(vp)} visible, but "
+                            f"nothing matched — check they are the same scene")
+            return
+
+        # REPLACE rather than extend: mixing an automatic pass into points you
+        # placed by hand leaves you unable to tell which is which when one is
+        # wrong. Undo restores nothing here, so the old set is worth keeping.
+        self.pairs = list(pairs)
+        for k, v in (("hfov", got["hfov_vis"]), ("yaw", got["yaw"]),
+                     ("pitch", got["pitch"]), ("roll", got["roll"])):
+            self.var[k].set(v)
+        self._maybe_pair()
+
+        after = self.live_residuals(ow, oh)
+        self.set_status(
+            f"auto: {len(tp)} thermal + {len(vp)} visible -> "
+            f"{len(pairs)} pairs, hfov {got['hfov_vis']:.1f}°, "
+            f"{AV.rms_in_thermal_px(after, self.vis.shape[1], got['hfov_vis']):.2f}"
+            f" thermal px. Turn points on to check and fix them.")
+
+    def do_fit(self):
+        if len(self.pairs) < 2:
+            return
+        ow, oh = AV.LEPTON_W * self.SCALE, AV.LEPTON_H * self.SCALE
+        try:
+            got, res = AV.fit_params(
+                self.pairs, ow, oh, self.vis.shape,
+                init={"hfov_vis": self.var["hfov"].get(),
+                      "yaw": self.var["yaw"].get(),
+                      "pitch": self.var["pitch"].get(),
+                      "roll": self.var["roll"].get()})
+        except Exception as e:
+            messagebox.showerror("Fit failed", str(e))
+            return
+        self.var["hfov"].set(got["hfov_vis"])
+        self.var["yaw"].set(got["yaw"])
+        self.var["pitch"].set(got["pitch"])
+        self.var["roll"].set(got["roll"])
+        ow, oh = AV.LEPTON_W * self.SCALE, AV.LEPTON_H * self.SCALE
+        after = self.live_residuals(ow, oh)
+        t_before = AV.rms_in_thermal_px(res, self.vis.shape[1],
+                                        got["hfov_vis"])
+        t_after = AV.rms_in_thermal_px(after, self.vis.shape[1],
+                                       got["hfov_vis"])
+        self.set_status(
+            f"{len(self.pairs)} pairs — 4-param fit {t_before:.2f} "
+            f"thermal px, + morph {t_after:.2f}  "
+            f"(a head is 4-15 thermal px wide)")
+        self.redraw()
+
+    def save_points(self):
+        p = filedialog.asksaveasfilename(defaultextension=".json",
+                                         initialfile="align_points.json")
+        if p:
+            json.dump({"scale": self.SCALE, "pairs": self.pairs},
+                      open(p, "w"), indent=1)
+            self.set_status(f"wrote {os.path.basename(p)}")
+
+    def load_points(self):
+        p = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+        if not p:
+            return
+        d = json.load(open(p))
+        k = self.SCALE / float(d.get("scale", self.SCALE))
+        self.pairs = [((t[0] * k, t[1] * k), (v[0], v[1]))
+                      for t, v in d["pairs"]]
+        self._maybe_pair()
 
     # ---------------------------------------------------------------- load
     def on_drop(self, event):
@@ -247,6 +561,7 @@ class App:
 
         if self.vis is not None and self.arr is not None:
             self.save_btn.config(state="normal")
+            self.auto_btn.config(state="normal")
         if redraw:
             self.redraw()
 
@@ -263,7 +578,14 @@ class App:
         ow, oh = AV.LEPTON_W * s, AV.LEPTON_H * s
         therm = cv2.resize(TD.colorize(self.arr), (ow, oh),
                            interpolation=cv2.INTER_NEAREST)
-        mx, my = AV.build_maps(self.vis.shape, ow, oh, **self.params())
+        # lam is on a LOG slider: the useful range spans six orders of
+        # magnitude, and a linear slider would be unusable at the low end
+        # where the interesting behaviour is.
+        lam = 0.0 if self.var["smooth"].get() <= 0 \
+            else 10.0 ** self.var["smooth"].get()
+        mx, my = AV.build_maps_morph(self.vis.shape, ow, oh, self.params(),
+                                     pairs=self.pairs, lam=lam,
+                                     strength=self.var["morph"].get())
         w = cv2.remap(self.vis, mx, my, cv2.INTER_LINEAR,
                       borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
         cover = float(((mx >= 0) & (mx < self.vis.shape[1]) &
@@ -272,14 +594,52 @@ class App:
         blend = cv2.addWeighted(w, 1.0 - a, therm, a, 0.0)
         return blend, w, therm, cover
 
+    def _mark(self, img, x, y, n, col, pending=False):
+        """A numbered crosshair. Hollow, so it never hides the thing you aimed at."""
+        x, y = int(round(x)), int(round(y))
+        cv2.circle(img, (x, y), 9, col, 1, cv2.LINE_AA)
+        cv2.line(img, (x - 14, y), (x - 4, y), col, 1, cv2.LINE_AA)
+        cv2.line(img, (x + 4, y), (x + 14, y), col, 1, cv2.LINE_AA)
+        cv2.line(img, (x, y - 14), (x, y - 4), col, 1, cv2.LINE_AA)
+        cv2.line(img, (x, y + 4), (x, y + 14), col, 1, cv2.LINE_AA)
+        cv2.putText(img, "?" if pending else str(n), (x + 11, y - 9),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
+
+    def _show(self, widget, img, attr):
+        """Fit an image into a pane, remembering the scale for click mapping."""
+        k = self.PANE_W / img.shape[1]
+        disp = cv2.resize(img, (int(img.shape[1] * k), int(img.shape[0] * k)),
+                          interpolation=cv2.INTER_AREA)
+        setattr(self, attr, k)
+        photo = ImageTk.PhotoImage(
+            Image.fromarray(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)))
+        widget.config(image=photo, text="")
+        widget.image = photo            # keep a reference or Tk frees it
+
     def redraw(self):
         if self.vis is None or self.arr is None:
             return
         blend, w, therm, cover = self.compose()
-        img = {"blend": blend, "thermal": therm, "visible": w}[self.mode]
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        self.photo = ImageTk.PhotoImage(Image.fromarray(rgb))
-        self.canvas.config(image=self.photo, text="")
+
+        if self.picking:
+            t = therm.copy()
+            for i, ((tx, ty), _) in enumerate(self.pairs, 1):
+                self._mark(t, tx, ty, i, (90, 230, 255))
+            if self.pending_t:
+                self._mark(t, *self.pending_t, 0, (255, 255, 255), True)
+            self._show(self.t_pane, t, "_t_disp")
+
+            v = self.vis.copy()
+            for i, (_, (vx, vy)) in enumerate(self.pairs, 1):
+                self._mark(v, vx, vy, i, (90, 230, 255))
+            if self.pending_v:
+                self._mark(v, *self.pending_v, 0, (255, 255, 255), True)
+            self._show(self.v_pane, v, "_v_disp")
+        else:
+            img = {"blend": blend, "thermal": therm, "visible": w}[self.mode]
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            self.photo = ImageTk.PhotoImage(Image.fromarray(rgb))
+            self.canvas.config(image=self.photo, text="")
         self.write_info(cover)
 
     def write_info(self, cover):
@@ -303,6 +663,23 @@ class App:
         if self.arr.dtype.kind == "f" and self.arr.max() < 200:
             t.insert("end", f"\nscene {self.arr.min():.1f} – "
                             f"{self.arr.max():.1f} °C\n")
+
+        if self.pairs:
+            ow, oh = AV.LEPTON_W * self.SCALE, AV.LEPTON_H * self.SCALE
+            res = self.live_residuals(ow, oh)
+            tpx = AV.rms_in_thermal_px(res, self.vis.shape[1],
+                                       self.var["hfov"].get())
+            t.insert("end", "\n" + "-" * 34 + "\n")
+            t.insert("end", f"\n{len(self.pairs)} point pairs\n")
+            t.insert("end", f"RMS {np.sqrt(np.mean(res**2)):7.1f} sony px\n")
+            t.insert("end", f"    {tpx:7.2f} thermal px\n\n")
+            # Per-point, so an outlier is visible. A pair that is far worse
+            # than the rest is either a misclick or a head at a very different
+            # depth from the others — both worth knowing before you trust the
+            # fit.
+            for i, r in enumerate(res, 1):
+                bar = "#" * min(20, int(r / 10))
+                t.insert("end", f"  {i:2d} {r:7.1f} px {bar}\n")
 
         t.insert("end", "\n" + "-" * 34 + "\n")
         t.insert("end", "\nthe residual you CANNOT\nremove here is parallax:\n"
@@ -328,12 +705,38 @@ class App:
         m.add_separator()
         m.add_command(label="Copy the flags for align_visible.py",
                       command=self.copy_flags)
+        m.add_separator()
+        m.add_command(label="Save point pairs…", command=self.save_points,
+                      state="normal" if self.pairs else "disabled")
+        m.add_command(label="Load point pairs…", command=self.load_points)
+        m.add_separator()
+        m.add_command(label="Pin these sliders as the default",
+                      command=self.pin_defaults)
         try:
             m.tk_popup(self.save_btn.winfo_rootx(),
                        self.save_btn.winfo_rooty()
                        + self.save_btn.winfo_height())
         finally:
             m.grab_release()
+
+    def pin_defaults(self):
+        """
+        Write the current sliders to align_defaults.json.
+
+        Only the rig parameters and the morph preferences — never the point
+        pairs. Pairs are scene-specific; saving them here would silently apply
+        one room's parallax to every other room.
+        """
+        d = {k: round(float(self.var[k].get()), 3)
+             for k in ("hfov", "yaw", "pitch", "roll", "morph", "smooth",
+                       "alpha") if k in self.var}
+        try:
+            json.dump(d, open(DEFAULTS_PATH, "w"), indent=1)
+        except OSError as e:
+            messagebox.showerror("Could not write defaults", str(e))
+            return
+        self.set_status(f"pinned to {os.path.basename(DEFAULTS_PATH)}: "
+                        + "  ".join(f"{k} {v}" for k, v in d.items()))
 
     def copy_flags(self):
         p = self.params()
@@ -362,12 +765,17 @@ class App:
 def main():
     ap = argparse.ArgumentParser(
         description="Overlay a Sony frame on a Lepton frame, correctly.")
+    d = load_defaults()
     ap.add_argument("files", nargs="*", help="a .jpg and a .npy, either order")
-    ap.add_argument("--hfov", type=float, default=67.4)
-    ap.add_argument("--alpha", type=float, default=0.5)
-    ap.add_argument("--yaw", type=float, default=0.0)
-    ap.add_argument("--pitch", type=float, default=0.0)
-    ap.add_argument("--roll", type=float, default=0.0)
+    ap.add_argument("--hfov", type=float, default=d["hfov"])
+    ap.add_argument("--alpha", type=float, default=d["alpha"])
+    ap.add_argument("--yaw", type=float, default=d["yaw"])
+    ap.add_argument("--pitch", type=float, default=d["pitch"])
+    ap.add_argument("--roll", type=float, default=d["roll"])
+    ap.add_argument("--coco", default="yolo11n.pt",
+                    help="COCO detector for the VISIBLE frame's people. "
+                         "Downloads on first use. The thermal side uses your "
+                         "own omega model from models/vN.")
     args = ap.parse_args()
 
     root = TkinterDnD.Tk() if HAVE_DND else tk.Tk()
