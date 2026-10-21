@@ -1385,6 +1385,8 @@ def main():
                          "SPACE twice draws a box by hand when the model "
                          "cannot see a person at any confidence; the "
                          "proposals stay live while you do.")
+    ap.add_argument("--capture-seeds", action="store_true",
+                    help="With --live, edit existing capture proposals instead of replacing them with thermal inference")
     ap.add_argument("--live-conf", type=float, default=0.29,
                     help="with --live, the starting confidence gate. [ and ] "
                          "move it during annotation.")
@@ -1400,6 +1402,10 @@ def main():
                          "Faster, but a propagated box is then never looked at "
                          "on the frame it actually landed on.")
     args = ap.parse_args()
+    if args.capture_seeds:
+        args.live = True
+        args.max_cluster = 1  # Review every RGB-transferred label on its own thermal frame.
+        args.review_drawn = True
 
     # NOT required=True. Only stage 5 (verify) and --live need a model at all;
     # stages 1-4 and 6-7 never touch one. Resolving hard here killed the whole
@@ -1437,6 +1443,18 @@ def main():
         hand_back(root)
         save_state(root, live=args.live)
 
+    # RGB proposal review mode persists with this capture.
+    seed_marker = os.path.join(root, ".capture_seed_review")
+    if args.capture_seeds or os.path.exists(seed_marker):
+        if args.no_live:
+            sys.exit("RGB proposal review requires live mode; omit --no-live")
+        args.capture_seeds = True
+        args.live = True
+        args.max_cluster = 1
+        args.review_drawn = True
+        with open(seed_marker, "w") as marker_file:
+            marker_file.write("Review every RGB proposal frame individually.\n")
+
     print(f"\nworking directory: {root}")
 
     # ---- 3 triage --------------------------------------------------------
@@ -1472,6 +1490,8 @@ def main():
                    "--conf", args.live_conf,
                    "--dedup-iou", args.dedup_iou,
                    "--max-shift", 16.0, "--min-corr", 0.55]
+            if args.capture_seeds:
+                cmd += ["--capture-seeds"]
             if args.weights:
                 cmd += ["--weights", args.weights]
             if run(cmd) != 0:

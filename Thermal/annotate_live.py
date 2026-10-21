@@ -363,6 +363,8 @@ def main():
         description="Model-in-the-loop omega annotation. Experimental.")
     ap.add_argument("capture_dir")
     ap.add_argument("--weights", default=None)
+    ap.add_argument("--capture-seeds", action="store_true",
+                    help="Start with capture labels as editable proposals; never mark human until committed")
     ap.add_argument("--conf", type=float, default=0.29,
                     help="starting confidence gate; [ and ] move it live")
     ap.add_argument("--floor", type=float, default=0.01,
@@ -511,7 +513,7 @@ def main():
         arr = np.load(os.path.join(root, "npy", rep["file"] + ".npy"))
         H, W = arr.shape[:2]
 
-        dets = infer(model, arr, args.floor, args.imgsz)
+        dets = [] if args.capture_seeds else infer(model, arr, args.floor, args.imgsz)
 
         hp = os.path.join(human_dir, rep["file"] + ".txt")
         # MUTATED IN PLACE, NEVER REBOUND. The mouse callback holds a
@@ -521,6 +523,10 @@ def main():
         # for the same reason.
         boxes[:] = ([b for b in an.load_labels(hp, W, H)
                      if b[0] == OMEGA_CLASS] if os.path.exists(hp) else [])
+        if args.capture_seeds and not os.path.exists(hp):
+            seed_path = os.path.join(root, "labels", rep["file"] + ".txt")
+            if os.path.exists(seed_path):
+                boxes[:] = [b for b in an.load_labels(seed_path, W, H) if b[0] == OMEGA_CLASS]
 
         S = args.scale
         advance = None

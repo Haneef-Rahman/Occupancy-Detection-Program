@@ -9,6 +9,7 @@ Record a capture log with YOLO omega labels and nothing else.
     r        start / stop recording (continuous)
     s        take ONE frame — a deliberate sample, not a stream
     q, ESC   quit
+    Conf %   live confidence slider (37 = 0.37), also used for saved labels
 
 WHY OMEGA ONLY. The person box and the omega box are different targets, and
 thermal_detect.py wrote both because which one a model should learn was an open
@@ -155,7 +156,7 @@ def draw(data, omegas, S, recording, n_frames, conf, capture_name):
 # Capture log
 # ---------------------------------------------------------------------------
 MANIFEST_COLS = ["file", "timestamp", "view", "background", "threshold",
-                 "n_det", "omega_count", "omega_score", "flags", "note"]
+                 "n_det", "omega_count", "omega_score", "flags", "note", "conf"]
 
 
 def open_capture(note, conf, weights):
@@ -173,6 +174,7 @@ def open_capture(note, conf, weights):
         fh.write(f"recorder   dataset_recording.py\n"
                  f"weights    {weights or 'NONE - frames are UNLABELLED'}\n"
                  f"conf       {conf}\n"
+                 f"conf_note  initial threshold; per-frame values in manifest.csv\n"
                  f"classes    omega only (class {OMEGA_CLASS}); no person boxes\n"
                  f"started    {datetime.now().isoformat(timespec='seconds')}\n"
                  f"note       {note}\n")
@@ -182,7 +184,7 @@ def open_capture(note, conf, weights):
     return d, fh, w
 
 
-def write_frame(d, w, n, data, omegas, note, no_review):
+def write_frame(d, w, n, data, omegas, note, no_review, conf=None):
     fn = f"cap_{n:06d}"
     np.save(os.path.join(d, "npy", fn + ".npy"), data)
 
@@ -220,7 +222,8 @@ def write_frame(d, w, n, data, omegas, note, no_review):
     scores = [v for (_, _, _, _, v) in omegas]
     w.writerow([fn, datetime.now().isoformat(timespec="milliseconds"),
                 "horizontal", "", "", 0, len(omegas),
-                f"{max(scores, default=0.0):.4f}", "YOLO-omega", note])
+                f"{max(scores, default=0.0):.4f}", "YOLO-omega", note,
+                "" if conf is None else f"{conf:.2f}"])
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +254,8 @@ def main():
                          "this for collecting on a machine that is not going "
                          "to train anything.")
     args = ap.parse_args()
+    if not 0.0 <= args.conf <= 1.0:
+        ap.error("--conf must be between 0 and 1")
 
     # WHY THIS IS NOT JUST `from ultralytics import YOLO` ANY MORE. It was, and
     # it ran before open_camera, so a machine without ultralytics or without
@@ -276,6 +281,8 @@ def main():
 
     win = "dataset recording"
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
+    cv2.createTrackbar("Conf %", win, round(args.conf * 100), 100,
+                       lambda value: None)
 
     recording = False
     n = 0
@@ -308,11 +315,14 @@ def main():
                 print("camera returned no frame — stopping")
                 break
 
+            # Snapshot once so inference, preview and saved labels agree,
+            # even if the slider moves while this frame is being processed.
+            args.conf = cv2.getTrackbarPos("Conf %", win) / 100.0
             omegas = yolo_omegas(model, data, args.conf, args.imgsz)
 
             if recording and frame_i % max(1, args.capture_every) == 0:
                 write_frame(cap_dir, cap_w, n, data, omegas, args.note,
-                            args.no_review)
+                            args.no_review, conf=args.conf)
                 n += 1
             frame_i += 1
 
@@ -340,7 +350,7 @@ def main():
                     # Already writing this frame stream — just force this one
                     # out regardless of --capture-every.
                     write_frame(cap_dir, cap_w, n, data, omegas, args.note,
-                                args.no_review)
+                                args.no_review, conf=args.conf)
                     n += 1
                     flash = 3
                     print(f"  shot -> {os.path.basename(cap_dir)} "
@@ -352,7 +362,7 @@ def main():
                             args.conf, weights)
                         print(f"manual shots -> {shot_dir}")
                     write_frame(shot_dir, shot_w, n_shots, data, omegas,
-                                args.note, args.no_review)
+                                args.note, args.no_review, conf=args.conf)
                     n_shots += 1
                     flash = 3
                     print(f"  shot {n_shots} -> {os.path.basename(shot_dir)}")
