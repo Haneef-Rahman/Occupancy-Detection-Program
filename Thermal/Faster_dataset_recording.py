@@ -74,15 +74,40 @@ class CameraSerial:
 class ThermalStream(LeptonUVC):
     def __init__(self):
         self.frames=deque(maxlen=180);self.lock=threading.Lock()
+        self.callback_count=0;self.last_frame_info=None
         super().__init__()
     def _on_frame(self,p,user):
         ts=time.time_ns()//1000;f=p.contents
+        self.callback_count+=1
+        self.last_frame_info=(int(f.width),int(f.height),int(f.data_bytes))
         if f.data and f.data_bytes==f.width*f.height*2:
             raw=np.frombuffer(ctypes.string_at(f.data,f.data_bytes),np.uint16).copy().reshape(f.height,f.width)
             with self.lock: self.frames.append((ts,int(f.sequence),raw))
         super()._on_frame(p,user)
     def snapshot(self):
         with self.lock: return list(self.frames)
+
+def open_thermal_stream(factory=None,timeout=15):
+    """Establish thermal delivery before opening/resetting the ESP USB serial port."""
+    factory=factory or ThermalStream
+    for attempt in range(2):
+        cam=None
+        try:
+            print(f'Opening thermal stream (attempt {attempt+1}/2)...',flush=True)
+            cam=factory()
+            deadline=time.monotonic()+timeout
+            while time.monotonic()<deadline:
+                frames=cam.snapshot()
+                if frames:
+                    print(f'Thermal ready: {frames[-1][2].shape}, sequence {frames[-1][1]}',flush=True)
+                    return cam
+                time.sleep(.02)
+            raise TimeoutError(f'No thermal frames: callbacks={cam.callback_count}, last_frame={cam.last_frame_info}')
+        except Exception as exc:
+            if cam:cam.release()
+            print(f'Thermal startup failed: {exc}',flush=True)
+            if attempt==1:raise
+            time.sleep(1)
 
 def persist(root,items,status,args):
     data={'schema':1,'status':status,'temperature_kelvin_per_count':args.kelvin_per_count,
@@ -118,7 +143,8 @@ def main():
     (root/'source.txt').write_text('recorder Faster_dataset_recording.py\nRGB/thermal pending annotation; no human labels\n'+a.note+'\n')
     rows=[];cam=None;esp=None;fh=None;complete=False
     try:
-        esp=CameraSerial(a.port);cam=ThermalStream()
+        cam=open_thermal_stream()
+        esp=CameraSerial(a.port)
         fh=(root/'manifest.csv').open('w',newline='');writer=csv.writer(fh);writer.writerow(base.MANIFEST_COLS)
         persist(root,rows,'recording',a)
         recording=a.count>0;next_capture=0;waiting_since=time.monotonic()

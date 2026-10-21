@@ -1,0 +1,765 @@
+{
+  "state": {
+    "x": 698,
+    "y": 544,
+    "scale": 8.47,
+    "angle": -0.5,
+    "opacity": 0.6,
+    "left": 26,
+    "right": 231,
+    "top": 43,
+    "bottom": 157,
+    "flipX": false,
+    "flipY": false
+  },
+  "history": [
+    {
+      "at": "2026-10-21T08:18:01.630Z",
+      "action": "drag IR",
+      "state": {
+        "x": 718,
+        "y": 602,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:07.720Z",
+      "action": "drag IR",
+      "state": {
+        "x": 534,
+        "y": 446,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:12.845Z",
+      "action": "drag IR",
+      "state": {
+        "x": 706,
+        "y": 559,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:18.346Z",
+      "action": "angle",
+      "state": {
+        "x": 706,
+        "y": 559,
+        "scale": 8.41,
+        "angle": -3.7,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:21.462Z",
+      "action": "angle",
+      "state": {
+        "x": 706,
+        "y": 559,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:24.246Z",
+      "action": "scale",
+      "state": {
+        "x": 706,
+        "y": 559,
+        "scale": 10.06,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:37.204Z",
+      "action": "drag IR",
+      "state": {
+        "x": 842,
+        "y": 527,
+        "scale": 10.06,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:41.278Z",
+      "action": "scale",
+      "state": {
+        "x": 842,
+        "y": 527,
+        "scale": 9.51,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:46.966Z",
+      "action": "drag IR",
+      "state": {
+        "x": 813,
+        "y": 551,
+        "scale": 9.51,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:51.624Z",
+      "action": "scale",
+      "state": {
+        "x": 813,
+        "y": 551,
+        "scale": 9.22,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:18:57.482Z",
+      "action": "drag IR",
+      "state": {
+        "x": 781,
+        "y": 566,
+        "scale": 9.22,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:04.982Z",
+      "action": "opacity",
+      "state": {
+        "x": 781,
+        "y": 566,
+        "scale": 9.22,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:17.674Z",
+      "action": "scale",
+      "state": {
+        "x": 781,
+        "y": 566,
+        "scale": 8.79,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:20.033Z",
+      "action": "drag IR",
+      "state": {
+        "x": 771,
+        "y": 575,
+        "scale": 8.79,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:25.965Z",
+      "action": "drag IR",
+      "state": {
+        "x": 682,
+        "y": 555,
+        "scale": 8.79,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:32.824Z",
+      "action": "scale",
+      "state": {
+        "x": 682,
+        "y": 555,
+        "scale": 9.45,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:37.115Z",
+      "action": "drag IR",
+      "state": {
+        "x": 670,
+        "y": 584,
+        "scale": 9.45,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:44.896Z",
+      "action": "drag IR",
+      "state": {
+        "x": 652,
+        "y": 584,
+        "scale": 9.45,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:50.754Z",
+      "action": "scale",
+      "state": {
+        "x": 652,
+        "y": 584,
+        "scale": 9.02,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:19:56.032Z",
+      "action": "drag IR",
+      "state": {
+        "x": 674,
+        "y": 576,
+        "scale": 9.02,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:20:00.115Z",
+      "action": "scale",
+      "state": {
+        "x": 674,
+        "y": 576,
+        "scale": 8.28,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:20:06.554Z",
+      "action": "drag IR",
+      "state": {
+        "x": 698,
+        "y": 538,
+        "scale": 8.28,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:20:09.157Z",
+      "action": "drag IR",
+      "state": {
+        "x": 698,
+        "y": 538,
+        "scale": 8.28,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:20:15.139Z",
+      "action": "scale",
+      "state": {
+        "x": 698,
+        "y": 538,
+        "scale": 9.11,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:20:18.932Z",
+      "action": "drag IR",
+      "state": {
+        "x": 679,
+        "y": 574,
+        "scale": 9.11,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:02.943Z",
+      "action": "drag IR",
+      "state": {
+        "x": 698,
+        "y": 539,
+        "scale": 9.11,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:07.859Z",
+      "action": "scale",
+      "state": {
+        "x": 698,
+        "y": 539,
+        "scale": 8.71,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:11.090Z",
+      "action": "drag IR",
+      "state": {
+        "x": 715,
+        "y": 528,
+        "scale": 8.71,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:15.426Z",
+      "action": "scale",
+      "state": {
+        "x": 715,
+        "y": 528,
+        "scale": 8.53,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:20.134Z",
+      "action": "drag IR",
+      "state": {
+        "x": 702,
+        "y": 537,
+        "scale": 8.53,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:26.672Z",
+      "action": "scale",
+      "state": {
+        "x": 702,
+        "y": 537,
+        "scale": 8.35,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:32.159Z",
+      "action": "drag IR",
+      "state": {
+        "x": 699,
+        "y": 541,
+        "scale": 8.35,
+        "angle": 0,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:27:41.817Z",
+      "action": "angle",
+      "state": {
+        "x": 699,
+        "y": 541,
+        "scale": 8.35,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:00.125Z",
+      "action": "drag IR",
+      "state": {
+        "x": 699,
+        "y": 544,
+        "scale": 8.35,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:06.175Z",
+      "action": "x",
+      "state": {
+        "x": 708,
+        "y": 544,
+        "scale": 8.35,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:14.850Z",
+      "action": "x",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.35,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:20.017Z",
+      "action": "scale",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.47,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:27.216Z",
+      "action": "left",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.47,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 64,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:40.984Z",
+      "action": "left",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.47,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 26,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:45.008Z",
+      "action": "right",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.47,
+        "angle": -0.6,
+        "opacity": 0.6,
+        "left": 26,
+        "right": 231,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:53.358Z",
+      "action": "angle",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.47,
+        "angle": -0.5,
+        "opacity": 0.6,
+        "left": 26,
+        "right": 231,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:28:59.449Z",
+      "action": "top",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.47,
+        "angle": -0.5,
+        "opacity": 0.6,
+        "left": 26,
+        "right": 231,
+        "top": 43,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T08:29:07.283Z",
+      "action": "bottom",
+      "state": {
+        "x": 698,
+        "y": 544,
+        "scale": 8.47,
+        "angle": -0.5,
+        "opacity": 0.6,
+        "left": 26,
+        "right": 231,
+        "top": 43,
+        "bottom": 157,
+        "flipX": false,
+        "flipY": false
+      }
+    }
+  ],
+  "coordinate_system": "RGB 1600x1200; IR native 160x120; translate centre, rotate clockwise, scale, mirror; crop in RGB coordinates",
+  "saved_utc": "20261021T082917229576Z",
+  "source_session": "/Users/haneefrahman2650/Claude/Projects/Occupancy Detection Project/experiments/esp32_flash_test/post-focus-check-20261021-02",
+  "mount": "User-reported printed CAD mount on tripod, 21 October 2026",
+  "validated": false,
+  "note": "Manual 2D fit. Depth-dependent alignment and exposure timing remain unvalidated.",
+  "preset_id": "mounted-postfocus-20261021",
+  "workflow_approved": true,
+  "approval_note": "User completed manual realignment and requested first Faster captures on 21 October 2026. Accuracy and exposure synchronization remain unvalidated.",
+  "rgb_size": [
+    1600,
+    1200
+  ],
+  "thermal_size": [
+    160,
+    120
+  ]
+}
