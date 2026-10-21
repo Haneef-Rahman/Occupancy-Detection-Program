@@ -266,3 +266,20 @@ Thermal/logs/merged_*/
 
 # RGB 4 Thermal
 RGB_4_Thermal/
+
+# Local SSH credentials and Mac/Windows connection settings
+# Runtime configuration stays outside this repository in ~/.ssh/.
+.ssh/
+occupancy_windows.conf
+occupancy_windows_known_hosts
+occupancy_windows_ed25519*
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+id_ecdsa
+id_ecdsa.pub
+authorized_keys
+administrators_authorized_keys
+known_hosts
+known_hosts.old
