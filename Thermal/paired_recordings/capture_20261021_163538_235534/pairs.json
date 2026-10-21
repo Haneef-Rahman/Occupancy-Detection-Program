@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "status": "incomplete",
+  "temperature_kelvin_per_count": 0.01,
+  "timing_validated": false,
+  "reviewed": false,
+  "pairs": [],
+  "alignment_file": "alignment.json",
+  "alignment_sha256": "a0d0ca4dbc3b11b7914c76e85a83780fe8503b37425620a8ea078d9c3052857d",
+  "timing_method": "nearest thermal host receipt to midpoint of RGB command-send and saved-ack; not exposure synchronization"
+}
