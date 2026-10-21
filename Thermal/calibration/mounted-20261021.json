@@ -1,0 +1,289 @@
+{
+  "state": {
+    "x": 706,
+    "y": 556,
+    "scale": 8.41,
+    "angle": 0,
+    "opacity": 0.34,
+    "left": 35,
+    "right": 221,
+    "top": 53,
+    "bottom": 140,
+    "flipX": false,
+    "flipY": false
+  },
+  "history": [
+    {
+      "at": "2026-10-21T05:21:54.231Z",
+      "action": "x",
+      "state": {
+        "x": 635,
+        "y": 600,
+        "scale": 10,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:21:57.821Z",
+      "action": "scale",
+      "state": {
+        "x": 635,
+        "y": 600,
+        "scale": 8.62,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:06.664Z",
+      "action": "drag IR",
+      "state": {
+        "x": 688,
+        "y": 552,
+        "scale": 8.62,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:09.496Z",
+      "action": "scale",
+      "state": {
+        "x": 688,
+        "y": 552,
+        "scale": 7.95,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:15.937Z",
+      "action": "drag IR",
+      "state": {
+        "x": 703,
+        "y": 572,
+        "scale": 7.95,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:23.194Z",
+      "action": "scale",
+      "state": {
+        "x": 703,
+        "y": 572,
+        "scale": 8.25,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:32.930Z",
+      "action": "drag IR",
+      "state": {
+        "x": 711,
+        "y": 543,
+        "scale": 8.25,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:36.278Z",
+      "action": "scale",
+      "state": {
+        "x": 711,
+        "y": 543,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:47.008Z",
+      "action": "drag IR",
+      "state": {
+        "x": 706,
+        "y": 556,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 0,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:22:53.857Z",
+      "action": "left",
+      "state": {
+        "x": 706,
+        "y": 556,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 35,
+        "right": 0,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:23:00.898Z",
+      "action": "right",
+      "state": {
+        "x": 706,
+        "y": 556,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 35,
+        "right": 221,
+        "top": 0,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:23:04.824Z",
+      "action": "top",
+      "state": {
+        "x": 706,
+        "y": 556,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 0,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:23:08.591Z",
+      "action": "bottom",
+      "state": {
+        "x": 706,
+        "y": 556,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.5,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:23:24.583Z",
+      "action": "opacity",
+      "state": {
+        "x": 706,
+        "y": 556,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    {
+      "at": "2026-10-21T05:23:31.086Z",
+      "action": "drag IR",
+      "state": {
+        "x": 706,
+        "y": 556,
+        "scale": 8.41,
+        "angle": 0,
+        "opacity": 0.34,
+        "left": 35,
+        "right": 221,
+        "top": 53,
+        "bottom": 140,
+        "flipX": false,
+        "flipY": false
+      }
+    }
+  ],
+  "coordinate_system": "RGB 1600x1200; IR native 160x120; translate centre, rotate clockwise, scale, mirror; crop in RGB coordinates",
+  "saved_utc": "20261021T052336085197Z",
+  "source_session": "/Users/haneefrahman2650/Claude/Projects/Occupancy Detection Project/experiments/esp32_flash_test/mounted-calibration-20261021-01",
+  "mount": "User-reported printed CAD mount on tripod, 21 October 2026",
+  "validated": false,
+  "note": "Manual 2D fit. Depth-dependent alignment and exposure timing remain unvalidated.",
+  "preset_id": "mounted-20261021",
+  "workflow_approved": true,
+  "approval_note": "User approved using the saved mounted alignment in Faster dataset pipeline on 21 October 2026. Manual 2D preset; depth/edge accuracy and exposure timing remain unvalidated.",
+  "rgb_size": [
+    1600,
+    1200
+  ],
+  "thermal_size": [
+    160,
+    120
+  ]
+}
