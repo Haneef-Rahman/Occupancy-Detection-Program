@@ -1,0 +1,53 @@
+{"action": "b", "frame": 43, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "b", "frame": 51, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "g", "frame": 112, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "g", "frame": 114, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "g", "frame": 119, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "g", "frame": 124, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "b", "frame": 135, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "b", "frame": 141, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "i", "frame": 150, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "i", "frame": 156, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "h", "frame": 165, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "h", "frame": 172, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "t", "frame": 212, "conf": 0.374, "search_conf": 0.18, "policy": "precise"}
+{"action": "t", "frame": 222, "conf": 0.374, "search_conf": 0.18, "policy": "faster"}
+{"action": "c", "frame": 276, "conf": 0.374, "search_conf": 0.18, "policy": "faster"}
+{"action": "2", "frame": 413, "conf": 0.374, "search_conf": 0.18, "policy": "precise"}
+{"action": "t", "frame": 421, "conf": 0.374, "search_conf": 0.18, "policy": "faster"}
+{"action": "t", "frame": 426, "conf": 0.374, "search_conf": 0.18, "policy": "auto"}
+{"action": "[", "frame": 672, "conf": 0.364, "search_conf": 0.18, "policy": "auto"}
+{"action": "[", "frame": 676, "conf": 0.354, "search_conf": 0.18, "policy": "auto"}
+{"action": "[", "frame": 685, "conf": 0.344, "search_conf": 0.18, "policy": "auto"}
+{"action": "[", "frame": 690, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": " ", "frame": 951, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": " ", "frame": 951, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 960, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 961, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 962, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 963, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 964, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 965, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 966, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 967, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 968, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 969, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 970, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 971, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 972, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 973, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 974, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 975, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "n", "frame": 976, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": " ", "frame": 977, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": " ", "frame": 986, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": " ", "frame": 986, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "x", "frame": 1021, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "c", "frame": 3110, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "g", "frame": 3230, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "p", "frame": 3355, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "p", "frame": 3363, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "p", "frame": 3370, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "p", "frame": 3380, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "p", "frame": 3391, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
+{"action": "p", "frame": 3430, "conf": 0.334, "search_conf": 0.18, "policy": "auto"}
