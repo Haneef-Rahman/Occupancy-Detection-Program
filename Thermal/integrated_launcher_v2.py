@@ -49,6 +49,49 @@ def draw(data, router, regions, scale=5, show_regions=False):
     return np.concatenate([panel, image])
 
 
+class TrackingSession:
+    """Shared processing path for live launcher and offline simulator.
+
+    No camera, clock or UI owned here. Callers supply original frame timestamps.
+    """
+    def __init__(self, detector, config=None, mode='auto'):
+        self.detector = detector
+        self.config = config or FastConfig()
+        self.mode = mode
+        self.reset()
+
+    def reset(self):
+        self.router = TrackingRouter((160, 120), self.config, self.mode)
+        self.frame = 0
+
+    def process(self, data, timestamp, origin='replay'):
+        if data.shape != (120, 160) or data.dtype.kind != 'f':
+            raise ValueError('expected native 160x120 float Celsius frame')
+        t0 = time.perf_counter()
+        image = thermal_image(data)
+        high = self.detector.base(image)
+        t1 = time.perf_counter()
+        self.router.begin(high, timestamp)
+        t2 = time.perf_counter()
+        low = self.detector.recover(image, self.router.regions)
+        t3 = time.perf_counter()
+        self.router.finish(low)
+        t4 = time.perf_counter()
+        self.frame += 1
+        router = self.router
+        row = {'frame': self.frame, 'time': timestamp, 'origin': origin, 'mode': router.mode,
+               'base_detections': high, 'recovery_detections': low, 'regions': router.regions,
+               'observed': [{'id': t.id, 'bbox': list(t.det['bbox']), 'conf': t.det.get('conf'),
+                             'source': t.det.get('source', 'base')} for t in router.observed()],
+               'unresolved': router.unresolved_count(), 'estimate': router.estimate(),
+               'base_ms': (t1-t0)*1000, 'recovery_ms': (t3-t2)*1000,
+               'tracking_ms': (t2-t1+t4-t3)*1000, 'processing_ms': (t4-t0)*1000,
+               'events': list(router.events),
+               'fast_stats': dict(router.fast.stats) if router.mode == 'faster' else {}}
+        router.events.clear()
+        return row
+
+
 def replay_frames(folder, fps=None, limit=0):
     paths = sorted(Path(folder).glob('*.npy'))
     if not paths:
@@ -155,6 +198,7 @@ def main(argv=None):
     print(f'Experimental tracking; logs: {out}\nNo screen recording. Press q to finish.')
     stream = replay_frames(args.replay, args.replay_fps, args.limit) if args.replay else live_frames(args.kelvin_per_count, args.limit)
     router = None
+    session = TrackingSession(detector, config, args.tracker)
     show_regions = args.show_search
     log = (out/'frames.jsonl').open('w')
     started = time.perf_counter()
@@ -164,30 +208,17 @@ def main(argv=None):
             if data.shape != (120, 160):
                 raise ValueError(f'expected native 160x120 Celsius thermal data; got {data.shape}')
             if router is None:
-                router = TrackingRouter((160, 120), config, args.tracker)
-            t0 = time.perf_counter()
-            image = thermal_image(data)
-            high = detector.base(image)
-            t1 = time.perf_counter()
-            regions = router.begin(high, timestamp)
-            t2 = time.perf_counter()
-            low = detector.recover(image, regions)
-            t3 = time.perf_counter()
-            router.finish(low)
-            t4 = time.perf_counter()
+                session.reset()
+                router = session.router
+            row = session.process(data, timestamp, origin)
+            router = session.router
+            regions = router.regions
             meta['frames'] += 1
+            row['frame'] = meta['frames']
             if args.save_thermal:
                 stem = f"cap_{meta['frames']-1:06d}"
                 np.save(out/'npy'/f'{stem}.npy', data.astype(np.float32))
                 recorded_pairs.append({'stem': stem, 'relative_time_s': timestamp})
-            row = {'frame': meta['frames'], 'time': timestamp, 'origin': origin, 'mode': router.mode,
-                   'base_detections': high, 'recovery_detections': low, 'regions': regions,
-                   'observed': [{'id': t.id, 'bbox': list(t.det['bbox']), 'conf': t.det.get('conf'),
-                                 'source': t.det.get('source', 'base')} for t in router.observed()],
-                   'unresolved': router.unresolved_count(), 'estimate': router.estimate(),
-                   'base_ms': (t1-t0)*1000, 'recovery_ms': (t3-t2)*1000,
-                   'tracking_ms': (t2-t1+t4-t3)*1000, 'processing_ms': (t4-t0)*1000,
-                   'events': router.events, 'fast_stats': router.fast.stats if router.mode == 'faster' else {}}
             log.write(json.dumps(row)+'\n'); log.flush(); router.events.clear()
             if not args.headless:
                 cv2.imshow('FLUXNET experimental tracking v2', draw(data, router, regions, args.scale, show_regions))
