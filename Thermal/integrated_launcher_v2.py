@@ -5,7 +5,7 @@ No screen recording. JSON logs contain observations, IDs, regions and timing.
 Legacy launcher remains available for radar fusion and hybrid-blob comparisons.
 """
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import hashlib
 import json
@@ -43,7 +43,7 @@ def draw(data, router, regions, scale=5, show_regions=False):
     texts = [f"{router.mode.upper()} K (experimental)   observed {len(router.observed())}",
              f"unresolved {router.unresolved_count()}   " +
              (f"legacy occupancy estimate {router.estimate()}" if router.mode == 'precise' else 'unresolved excluded from observed count'),
-             'q quit | space pause | r reset | c search circles']
+             'q quit | space pause | x reset | r record | c circles']
     for i, text in enumerate(texts):
         cv2.putText(panel, text, (12, 24+i*28), cv2.FONT_HERSHEY_SIMPLEX, .45, (220, 220, 220), 1)
     return np.concatenate([panel, image])
@@ -64,6 +64,19 @@ class TrackingSession:
         self.router = TrackingRouter((160, 120), self.config, self.mode)
         self.frame = 0
 
+    def set_confidence(self, conf, low_conf):
+        if not 0 < low_conf < conf < 1:
+            raise ValueError('require 0 < search confidence < detection confidence < 1')
+        self.detector.conf=conf;self.detector.low_conf=low_conf
+        self.config=replace(self.config,low_conf=low_conf)
+        self.router.config=self.config;self.router.fast.config=self.config
+        for track in self.router.fast.tracks:track.config=self.config
+
+    def set_mode(self, mode):
+        if mode not in ('auto','precise','faster'):raise ValueError('unknown tracker mode')
+        # Defer handover until the next frame's timestamp is available.
+        self.mode=mode;self.router.policy=mode
+
     def process(self, data, timestamp, origin='replay'):
         if data.shape != (120, 160) or data.dtype.kind != 'f':
             raise ValueError('expected native 160x120 float Celsius frame')
@@ -71,6 +84,9 @@ class TrackingSession:
         image = thermal_image(data)
         high = self.detector.base(image)
         t1 = time.perf_counter()
+        if self.mode != 'auto' and self.router.mode != self.mode:
+            if self.router.previous_time is None:self.router.mode=self.mode
+            else:self.router.switch(self.mode,timestamp)
         self.router.begin(high, timestamp)
         t2 = time.perf_counter()
         low = self.detector.recover(image, self.router.regions)
@@ -80,7 +96,9 @@ class TrackingSession:
         self.frame += 1
         router = self.router
         row = {'frame': self.frame, 'time': timestamp, 'origin': origin, 'mode': router.mode,
-               'base_detections': high, 'recovery_detections': low, 'regions': router.regions,
+               'normal_confidence': getattr(self.detector,'conf',None),
+               'recovery_confidence': getattr(self.detector,'low_conf',None),
+               'tracker_policy': self.mode, 'base_detections': high, 'recovery_detections': low, 'regions': router.regions,
                'observed': [{'id': t.id, 'bbox': list(t.det['bbox']), 'conf': t.det.get('conf'),
                              'source': t.det.get('source', 'base')} for t in router.observed()],
                'unresolved': router.unresolved_count(), 'estimate': router.estimate(),
@@ -93,30 +111,10 @@ class TrackingSession:
 
 
 def replay_frames(folder, fps=None, limit=0):
-    paths = sorted(Path(folder).glob('*.npy'))
-    if not paths:
-        raise ValueError(f'no .npy Celsius frames in {folder}')
-    times = None
-    if fps is None:
-        stamp_file = Path(folder).parent/'timestamps.json'
-        if stamp_file.is_file():
-            pairs = json.loads(stamp_file.read_text())
-            times = {p['stem']: float(p['relative_time_s']) for p in pairs}
-        else:
-            manifest = Path(folder).parent/'pairs.json'
-            pairs = json.loads(manifest.read_text())['pairs']
-            times = {p['stem']: float(p['thermal_host_receipt_epoch_us'])/1e6 for p in pairs}
-        t0 = times[paths[0].stem]
-    previous = None
-    for i, path in enumerate(paths[:limit or None]):
-        data = np.load(path, allow_pickle=False)
-        if data.dtype.kind != 'f':
-            raise ValueError(f'{path}: use converted Celsius npy/, not thermal_raw/')
-        timestamp = times[path.stem]-t0 if times is not None else i/fps
-        if not np.isfinite(timestamp) or (previous is not None and timestamp <= previous):
-            raise ValueError('replay timestamps must be finite and strictly increasing')
-        previous = timestamp
-        yield data, timestamp, str(path)
+    from capture_replay import CaptureSequence
+    sequence=CaptureSequence(folder,fps)
+    for i in range(min(limit or len(sequence),len(sequence))):
+        yield sequence.load(i),float(sequence.times[i]),str(sequence.paths[i])
 
 
 def live_frames(scale, limit=0):
@@ -159,25 +157,28 @@ def main(argv=None):
     ap.add_argument('--max-recovery-rois', type=int, default=6)
     ap.add_argument('--imgsz', type=int, default=640)
     ap.add_argument('--device', help='YOLO inference device, e.g. cpu or mps')
-    ap.add_argument('--replay', help='folder containing Celsius float .npy frames')
-    ap.add_argument('--replay-fps', type=float, help='override timestamps with an explicit rate; otherwise use adjacent timestamps.json or pairs.json')
+    ap.add_argument('--replay', help='capture folder or its npy directory, with recorded timestamps')
+    ap.add_argument('--replay-fps', type=float, help='override timestamps with an explicit rate; otherwise use capture timestamps or legacy manifest')
     ap.add_argument('--kelvin-per-count', type=float, choices=[.01, .1], help='live: supply verified fixed TLinear scale')
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--headless', action='store_true')
     ap.add_argument('--show-search', action='store_true')
     ap.add_argument('--save-thermal', action='store_true', help='save native Celsius camera arrays for later replay; not screen recording')
+    ap.add_argument('--record',action='store_true',help='start legacy-format thermal dataset recording immediately')
+    ap.add_argument('--capture-every',type=int,default=1,help='save one in N processed frames while recording')
+    ap.add_argument('--note',default='',help='note saved with dataset captures')
+    ap.add_argument('--capture-root',type=Path,default=Path(__file__).resolve().parent/'logs')
     ap.add_argument('--scale', type=int, default=5)
     ap.add_argument('--output', type=Path, help='new log directory; never overwrite')
     args = ap.parse_args(argv)
     if args.replay_fps is not None and (not np.isfinite(args.replay_fps) or args.replay_fps <= 0):
         ap.error('--replay-fps must be finite and positive')
-    if args.replay and args.replay_fps is None and not any(
-            (Path(args.replay).parent/name).is_file() for name in ['pairs.json', 'timestamps.json']):
-        ap.error('--replay needs adjacent timestamps.json / pairs.json or explicit --replay-fps')
     if not args.replay and args.kelvin_per_count is None:
         ap.error('live input requires --kelvin-per-count from verified TLinear settings')
-    if args.limit < 0 or args.scale < 1 or args.imgsz < 32:
+    if args.limit < 0 or args.scale < 1 or args.imgsz < 32 or args.capture_every < 1:
         ap.error('invalid limit, scale or image size')
+    if not 0 < args.recovery_conf < args.conf < 1:
+        ap.error('require 0 < recovery confidence < detection confidence < 1')
     config = FastConfig(recovery_seconds=args.recovery_seconds, max_speed=args.max_speed_px_s,
                         max_accel=args.max_accel_px_s2, max_radius=args.max_radius_px,
                         size_ratio=args.size_ratio, max_rois=args.max_recovery_rois, low_conf=args.recovery_conf)
@@ -195,58 +196,61 @@ def main(argv=None):
             'timestamp_kind': ('explicit-replay-rate' if args.replay_fps else 'recorded-host-receipt') if args.replay else 'host-receipt-not-exposure',
             'started': datetime.now().astimezone().isoformat(), 'frames': 0}
     (out/'session.json').write_text(json.dumps(meta, indent=2))
-    print(f'Experimental tracking; logs: {out}\nNo screen recording. Press q to finish.')
+    print(f'Experimental tracking; logs: {out}\nNo screen recording. R record | S single frame | C circles | H help | Q quit.')
     stream = replay_frames(args.replay, args.replay_fps, args.limit) if args.replay else live_frames(args.kelvin_per_count, args.limit)
-    router = None
+    from launcher_controls import DatasetCapture, LauncherControls
     session = TrackingSession(detector, config, args.tracker)
-    show_regions = args.show_search
+    recorder = DatasetCapture(args.capture_root,weights,args.note)
+    ui = LauncherControls(session,recorder,args.show_search,live=not bool(args.replay))
     log = (out/'frames.jsonl').open('w')
+    actions = (out/'controls.jsonl').open('w')
     started = time.perf_counter()
     recorded_pairs = []
+    data=row=None;record_pending=args.record;record_index=0
+    window='FLUXNET experimental tracking v2'
     try:
-        for data, timestamp, origin in stream:
-            if data.shape != (120, 160):
-                raise ValueError(f'expected native 160x120 Celsius thermal data; got {data.shape}')
-            if router is None:
-                session.reset()
-                router = session.router
-            row = session.process(data, timestamp, origin)
-            router = session.router
-            regions = router.regions
-            meta['frames'] += 1
-            row['frame'] = meta['frames']
-            if args.save_thermal:
-                stem = f"cap_{meta['frames']-1:06d}"
-                np.save(out/'npy'/f'{stem}.npy', data.astype(np.float32))
-                recorded_pairs.append({'stem': stem, 'relative_time_s': timestamp})
-            log.write(json.dumps(row)+'\n'); log.flush(); router.events.clear()
+        if not args.headless:
+            cv2.namedWindow(window,cv2.WINDOW_AUTOSIZE)
+            cv2.setMouseCallback(window,ui.mouse)
+        while not ui.quit:
+            if not ui.paused or ui.step or row is None:
+                ui.step=False
+                try:data,timestamp,origin=next(stream)
+                except StopIteration:break
+                received=datetime.now().isoformat(timespec='milliseconds')
+                row=session.process(data,timestamp,origin)
+                meta['frames']+=1;row['frame']=meta['frames'];row['received_at']=received
+                if args.save_thermal:
+                    stem=f"cap_{meta['frames']-1:06d}"
+                    np.save(out/'npy'/f'{stem}.npy',data.astype(np.float32))
+                    recorded_pairs.append(dict(stem=stem,relative_time_s=timestamp))
+                log.write(json.dumps(row)+'\n');log.flush()
+                if record_pending:
+                    ui.command(ord('r'),data,row);record_pending=False
+                if recorder.continuous:
+                    if record_index % args.capture_every==0:recorder.write(recorder.continuous,data,row)
+                    record_index+=1
+                else:record_index=0
             if not args.headless:
-                cv2.imshow('FLUXNET experimental tracking v2', draw(data, router, regions, args.scale, show_regions))
-                key = cv2.waitKey(1) & 0xff
-                if key in (ord('q'), 27):
-                    break
-                if key == ord('c'):
-                    show_regions = not show_regions
-                if key == ord('r'):
-                    router = None
-                if key == ord(' '):
-                    while True:
-                        key = cv2.waitKey(100) & 0xff
-                        if key in (ord(' '), ord('q'), 27):
-                            break
-                    if key in (ord('q'), 27):
-                        break
-                    # Physical movement during a pause is unobserved. Reset the
-                    # state, rather than bridge that gap with stale identities.
-                    if not args.replay:
-                        router = None
+                cv2.imshow(window,ui.render(data,row,args.scale))
+                key=cv2.waitKey(40 if ui.paused else 1)
+                if key!=-1:ui.actions.append(key & 0xff)
+                while ui.actions:
+                    action=ui.actions.popleft();ui.command(action,data,row)
+                    if action==ord('r'):record_index=0
+                if cv2.getWindowProperty(window,cv2.WND_PROP_VISIBLE)<1:ui.quit=True
+            for event in ui.events:
+                actions.write(json.dumps(event)+'\n')
+            if ui.events:actions.flush();ui.events.clear()
         meta['status'] = 'completed'
     except BaseException as error:
         meta['status'] = 'interrupted' if isinstance(error, KeyboardInterrupt) else 'failed'
         meta['error'] = str(error)
         raise
     finally:
-        stream.close(); log.close()
+        stream.close(); log.close(); actions.close(); recorder.close()
+        meta['dataset_captures']=[str(p) for p in recorder.folders]
+        meta['dataset_frames']=recorder.total
         if not args.headless:
             cv2.destroyAllWindows()
         meta['elapsed_seconds'] = time.perf_counter()-started
@@ -259,6 +263,7 @@ def main(argv=None):
             for path in [*out.rglob('*'), out]:
                 os.chown(path, uid, gid)
         print(f"{meta['frames']} frames; {meta['status']}. Logs: {out}")
+        for folder in recorder.folders:print(f'Dataset capture: {folder}')
 
 
 if __name__ == '__main__':
