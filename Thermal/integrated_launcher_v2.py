@@ -10,6 +10,7 @@ from datetime import datetime
 import hashlib
 import json
 import os
+import queue
 from pathlib import Path
 import time
 
@@ -182,6 +183,19 @@ def main(argv=None):
     config = FastConfig(recovery_seconds=args.recovery_seconds, max_speed=args.max_speed_px_s,
                         max_accel=args.max_accel_px_s2, max_radius=args.max_radius_px,
                         size_ratio=args.size_ratio, max_rois=args.max_recovery_rois, low_conf=args.recovery_conf)
+    if args.headless:
+        run_capture(args, config)
+    else:
+        from launcher_desktop import run_desktop
+        run_desktop(lambda bridge: run_capture(args, config, bridge), args)
+
+
+def run_capture(args, config, bridge=None):
+    """Own inference, camera, tracker and recording on one worker thread.
+
+    The native UI receives immutable snapshots and queues changes between frames.
+    Headless callers use the same processing and recording path synchronously.
+    """
     from model_registry import resolve_weights
     from ultralytics import YOLO
     weights = Path(resolve_weights(args.weights)).resolve()
@@ -207,12 +221,19 @@ def main(argv=None):
     started = time.perf_counter()
     recorded_pairs = []
     data=row=None;record_pending=args.record;record_index=0
-    window='FLUXNET experimental tracking v2'
     try:
-        if not args.headless:
-            cv2.namedWindow(window,cv2.WINDOW_AUTOSIZE)
-            cv2.setMouseCallback(window,ui.mouse)
-        while not ui.quit:
+        if bridge:bridge.publish(ui=ui)
+        while not ui.quit and not (bridge and bridge.stop.is_set()):
+            if bridge:
+                changed=False
+                while True:
+                    try:request_id,action=bridge.commands.get_nowait()
+                    except queue.Empty:break
+                    ui.command(action,data,row)
+                    if action==ord('r'):record_index=0
+                    changed=True
+                if changed:bridge.publish(ui=ui,ack=request_id)
+                if ui.quit or bridge.stop.is_set():break
             if not ui.paused or ui.step or row is None:
                 ui.step=False
                 try:data,timestamp,origin=next(stream)
@@ -220,6 +241,7 @@ def main(argv=None):
                 received=datetime.now().isoformat(timespec='milliseconds')
                 row=session.process(data,timestamp,origin)
                 meta['frames']+=1;row['frame']=meta['frames'];row['received_at']=received
+                ui.observe(row)
                 if args.save_thermal:
                     stem=f"cap_{meta['frames']-1:06d}"
                     np.save(out/'npy'/f'{stem}.npy',data.astype(np.float32))
@@ -231,14 +253,10 @@ def main(argv=None):
                     if record_index % args.capture_every==0:recorder.write(recorder.continuous,data,row)
                     record_index+=1
                 else:record_index=0
-            if not args.headless:
-                cv2.imshow(window,ui.render(data,row,args.scale))
-                key=cv2.waitKey(40 if ui.paused else 1)
-                if key!=-1:ui.actions.append(key & 0xff)
-                while ui.actions:
-                    action=ui.actions.popleft();ui.command(action,data,row)
-                    if action==ord('r'):record_index=0
-                if cv2.getWindowProperty(window,cv2.WND_PROP_VISIBLE)<1:ui.quit=True
+                if bridge:bridge.publish(ui=ui,row=row,data=data)
+            elif bridge:
+                # The UI remains interactive while this worker waits or infers.
+                bridge.stop.wait(.02)
             for event in ui.events:
                 actions.write(json.dumps(event)+'\n')
             if ui.events:actions.flush();ui.events.clear()
@@ -251,8 +269,7 @@ def main(argv=None):
         stream.close(); log.close(); actions.close(); recorder.close()
         meta['dataset_captures']=[str(p) for p in recorder.folders]
         meta['dataset_frames']=recorder.total
-        if not args.headless:
-            cv2.destroyAllWindows()
+        if bridge:bridge.publish(ui=ui)
         meta['elapsed_seconds'] = time.perf_counter()-started
         if args.save_thermal:
             (out/'timestamps.json').write_text(json.dumps(recorded_pairs, indent=2))
