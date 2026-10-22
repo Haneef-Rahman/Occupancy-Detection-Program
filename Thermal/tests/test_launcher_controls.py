@@ -107,9 +107,9 @@ class ControlsTests(unittest.TestCase):
         row=self.frame()
         before=self.session.router
         image=self.ui.render(self.data,row,5)
-        self.assertEqual(image.shape,(740,1150,3))
+        self.assertEqual(image.shape,(840,1240,3))
         for (x0,y0,x1,y1),key in self.ui.buttons:
-            self.assertTrue(0<=x0<x1<=1150 and 0<=y0<y1<=740)
+            self.assertTrue(0<=x0<x1<=1240 and 0<=y0<y1<=840)
             if key=='c':
                 self.ui.mouse(cv2.EVENT_LBUTTONUP,x0+2,y0+2,0,None)
         self.ui.command(self.ui.actions.popleft())
@@ -117,5 +117,83 @@ class ControlsTests(unittest.TestCase):
         self.ui.command(ord(' '));self.assertTrue(self.ui.paused)
         self.ui.command(ord('n'));self.assertTrue(self.ui.step)
         self.ui.command(ord('x'));self.assertIsNot(self.session.router,before)
+
+class ThemeInteractionTests(unittest.TestCase):
+    setUp=ControlsTests.setUp
+    tearDown=ControlsTests.tearDown
+    frame=ControlsTests.frame
+    # Dedicated regressions for the two draggable controls.
+    def test_slider_preview_commit_bounds_and_keyboard(self):
+        row=self.frame();self.ui.render(self.data,row,5)
+        original=self.session.detector.conf
+        x0,x1,y=self.ui.sliders['conf']['rail']
+        self.ui.mouse(cv2.EVENT_LBUTTONDOWN,x0+int((x1-x0)*.7),y,0,None)
+        self.assertEqual(self.ui.dragging,'conf')
+        self.ui.render(self.data,row,5)
+        self.assertEqual(self.session.detector.conf,original,'Drag preview must not change inference yet')
+        self.ui.mouse(cv2.EVENT_MOUSEMOVE,x1+200,y,0,None)
+        self.ui.mouse(cv2.EVENT_LBUTTONUP,x1+200,y,0,None)
+        self.assertIsNone(self.ui.dragging)
+        self.assertEqual(len(self.ui.actions),1)
+        self.ui.command(self.ui.actions.popleft(),self.data,row)
+        self.assertEqual(self.session.detector.conf,.99)
+        self.ui.render(self.data,row,5)
+        x0,x1,y=self.ui.sliders['low_conf']['rail']
+        self.ui.mouse(cv2.EVENT_LBUTTONDOWN,x1,y,0,None)
+        self.ui.mouse(cv2.EVENT_LBUTTONUP,x1,y,0,None)
+        self.ui.command(self.ui.actions.popleft(),self.data,row)
+        self.assertEqual(self.session.detector.low_conf,.98)
+        self.assertEqual(self.session.router.fast.config.low_conf,.98)
+        self.ui.command(ord(';'))
+        self.assertAlmostEqual(self.session.detector.low_conf,.97)
+        self.assertEqual(self.ui.bubble_name,'low_conf')
+        self.assertEqual(row['normal_confidence'],original,'Displayed row keeps its inference threshold')
+
+    def test_all_buttons_and_sliders_stay_inside_supported_sizes(self):
+        row=self.frame()
+        for scale in (1,3,5,8):
+            image=self.ui.render(self.data,row,scale)
+            h,w=image.shape[:2]
+            self.assertEqual({key for _,key in self.ui.buttons},set('q123rs nxhbicgpvo'))
+            for (x0,y0,x1,y1),key in self.ui.buttons:
+                self.assertTrue(0<=x0<x1<=w and 0<=y0<y1<=h,(scale,key))
+            for slider in self.ui.sliders.values():
+                x0,y0,x1,y1=slider['bounds'];self.assertTrue(0<=x0<x1<=w and 0<=y0<y1<=h)
+
+class ContrastTests(unittest.TestCase):
+    setUp=ControlsTests.setUp
+    tearDown=ControlsTests.tearDown
+    frame=ControlsTests.frame
+
+    def test_inferno_matches_annotation_presets_without_changing_input(self):
+        from dataset_pipeline import colorize_view,VIEWS
+        from launcher_theme import thermal_view
+        # Varying, flat and outlier-heavy data exercise percentile/fallback behavior.
+        arrays=[np.linspace(18,37,19200,dtype=np.float32).reshape(120,160),
+                np.full((120,160),26,np.float32)]
+        outliers=arrays[0].copy();outliers[0,0]=-20;outliers[-1,-1]=100;arrays.append(outliers)
+        row=self.frame();self.ui.boxes=False;self.ui.raw=False;self.ui.show_search=False
+        for data in arrays:
+            before=data.copy()
+            for mode in range(len(VIEWS)):
+                self.ui.contrast=mode
+                actual=np.asarray(thermal_view(self.ui,data,row,160))
+                np.testing.assert_array_equal(actual,cv2.cvtColor(colorize_view(data,mode),cv2.COLOR_BGR2RGB))
+                np.testing.assert_array_equal(data,before)
+
+    def test_contrast_key_button_cycle_and_palette_return(self):
+        row=self.frame();router=self.session.router
+        conf=self.session.detector.conf;low=self.session.detector.low_conf
+        self.ui.render(self.data,row,5)
+        bounds=next(bounds for bounds,key in self.ui.buttons if key=='v')
+        self.ui.mouse(cv2.EVENT_LBUTTONUP,bounds[0]+3,bounds[1]+3,0,None)
+        self.ui.command(self.ui.actions.popleft(),self.data,row)
+        self.assertEqual(self.ui.contrast,1)
+        self.ui.command(ord('v'));self.assertEqual(self.ui.contrast,2)
+        self.ui.command(ord('v'));self.assertEqual(self.ui.contrast,0)
+        self.ui.command(ord('p'));self.assertEqual(self.ui.palette,1)
+        self.ui.command(ord('v'));self.assertEqual(self.ui.palette,0)
+        self.assertIs(self.session.router,router)
+        self.assertEqual((self.session.detector.conf,self.session.detector.low_conf),(conf,low))
 
 if __name__=='__main__':unittest.main()
