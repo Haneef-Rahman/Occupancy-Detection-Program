@@ -5,7 +5,7 @@ Never opens a camera, reads a desktop screen, or edits the source capture.
 """
 import argparse
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import hashlib
 import json
@@ -78,6 +78,10 @@ class RunReport:
 class Simulator:
     """All model/tracker mutations belong to one worker, including reset/seek."""
     def __init__(self, logs, output, weights, device='cpu', model_factory=None):
+        from heat_function import HeatFunction
+        self.heat_function=HeatFunction()
+        self.reset_global_ids=True
+        self.native_controls=None
         self.logs = Path(logs); self.output = Path(output); self.weights = str(weights)
         self.device = device; self.model_factory = model_factory
         self.lock = threading.Lock(); self.commands = queue.Queue()
@@ -91,6 +95,7 @@ class Simulator:
     def publish(self, **values):
         with self.lock:
             self.state.update(values)
+            self.state['native_version']=self.state.get('native_version',0)+1
 
     def snapshot(self):
         with self.lock:
@@ -119,13 +124,16 @@ class Simulator:
     def reset(self, status='restarted'):
         if self.report:
             self.report.close(status)
+        self.heat_function.reset()
         self.report = None; self.session = None
         self.index = -1; self.steps = 0; self.seek_target = None; self.playing = False
         # This worker is the only tracking session in this process. Reset ID
         # numbering so repeated runs can be compared reproducibly.
         from tracker import KalmanTrack
-        KalmanTrack._next_id = 1
-        self.publish(index=-1, playing=False, seek_target=None, row=None, run=None, error='', status='Ready — press Play or Step')
+        if self.reset_global_ids:KalmanTrack._next_id = 1
+        if self.native_controls:self.native_controls.recorder.close()
+        self.native_controls=None
+        self.publish(index=-1, playing=False, seek_target=None, row=None, data=None, history=[], controls=None, run=None, error='', status='Ready — press Play or Step')
         self.set_picture(self.preview(self.sequence.load(0)))
 
     @staticmethod
@@ -137,6 +145,7 @@ class Simulator:
         action = cmd['action']
         if action == 'shutdown':
             self.closed = True
+            if self.native_controls:self.native_controls.recorder.close()
             if self.report:
                 self.report.close('stopped')
             return
@@ -160,8 +169,30 @@ class Simulator:
             self.publish(loaded=True, total=len(sequence), capture=sequence.info(), settings={
                 **{k:v for k,v in self.settings.items() if k!='config'}, 'config':asdict(config)}, weights=self.weights)
             return
+        if action=='heat_config':
+            from heat_function import HeatFunction,HeatConfig
+            self.heat_function=HeatFunction(HeatConfig(**cmd['values']))
+            if self.report:self.report.meta.setdefault('heat_configuration_changes',[]).append(dict(frame=self.index+1,values=cmd['values']))
+            self.publish(status='Heat settings updated; gate restarted',heat_config=cmd['values']);return
         if not self.sequence:
             raise ValueError('Load a capture first.')
+        if action == 'control':
+            command=cmd['command']
+            if self.native_controls:
+                self.native_controls.command(command,self.state.get('data'),self.state.get('row'))
+                self.settings['conf']=self.detector.conf;self.settings['low_conf']=self.detector.low_conf;self.settings['mode']=self.session.mode;self.settings['config']=self.session.config
+                if self.report:
+                    self.report.meta.setdefault('control_events',[]).extend(self.native_controls.events)
+                    self.native_controls.events.clear()
+                self.publish_native()
+            elif isinstance(command,dict):
+                conf=self.settings['conf'];low=self.settings['low_conf'];value=float(command['value'])
+                if command['slider']=='conf':conf=min(.99,max(low+.01,value))
+                else:low=min(conf-.01,max(.01,value))
+                self.settings.update(conf=conf,low_conf=low,config=replace(self.settings['config'],low_conf=low))
+            elif chr(command) in '123t':
+                self.settings['mode']={'1':'auto','2':'precise','3':'faster'}.get(chr(command),('auto','precise','faster')[(('auto','precise','faster').index(self.settings['mode'])+1)%3])
+            return
         if action == 'speed':
             speed = float(cmd['value'])
             if speed not in (.25,.5,1.,2.,4.,16.):
@@ -222,13 +253,20 @@ class Simulator:
             self.session = engine.TrackingSession(self.detector, self.settings['config'], self.settings['mode'])
             self.report = RunReport(self.output, self.sequence, self.settings['config'], self.settings['mode'], self.weights)
             self.report.meta['normal_confidence'] = self.settings['conf']
+            from launcher_controls import LauncherControls,DatasetCapture
+            self.native_controls=LauncherControls(self.session,DatasetCapture(self.output/'captures',self.weights,'Simulator replay'),live=False)
             self.publish(run=str(self.report.path))
         frame_start = time.monotonic()
         i = self.index+1
         data = self.sequence.load(i)
         row = self.session.process(data, float(self.sequence.times[i]), str(self.sequence.paths[i]))
         row['input_array_sha256'] = hashlib.sha256(data.tobytes()).hexdigest()
+        self.heat_function.update(data,row)
+        self.report.meta['heat_config']=asdict(self.heat_function.config)
         self.report.append(row)
+        self.native_controls.observe(row)
+        if self.native_controls.recorder.continuous:self.native_controls.recorder.write(self.native_controls.recorder.continuous,data,row)
+        self.publish_native(row,data)
         self.index = i
         # Render through the same launcher; remove its native keyboard footer,
         # since native controls belong to this simulator.
@@ -256,6 +294,14 @@ class Simulator:
             # timestamps passed to the tracker still come from the recording.
             self.next_due = max(time.monotonic(), frame_start+gap)
 
+    def publish_native(self,row=None,data=None):
+        ui=self.native_controls
+        if ui is None:return
+        d=ui.session.detector
+        values=dict(controls=dict(conf=d.conf,low_conf=d.low_conf,mode=ui.session.mode,paused=not self.playing,recording=bool(ui.recorder.continuous),saved=ui.recorder.total),history=[dict(s) for s in ui.history.samples],overview=list(ui.history.overview),heat_config=asdict(self.heat_function.config))
+        if row is not None:values.update(row=row,data=data.copy(),native_frame_version=self.state.get('native_frame_version',0)+1)
+        self.publish(**values)
+
     def worker(self):
         while not self.closed:
             try:
@@ -265,6 +311,7 @@ class Simulator:
                     command = None
                 if command:
                     self.handle(command)
+                    self.publish(native_ack=command.get('native_request',self.state.get('native_ack',0)))
                 if self.closed:
                     break
                 active = self.sequence is not None and (self.steps or self.seek_target is not None or
@@ -531,9 +578,8 @@ def main():
                 time.sleep(.1)
         finally:sim.close()
     else:
-        import tkinter as tk
-        root=tk.Tk();SimulatorWindow(root,sim)
-        root.mainloop()
+        from launcher_desktop import run_simulator_desktop
+        run_simulator_desktop(sim)
 
 
 if __name__=='__main__':main()
