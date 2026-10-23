@@ -1,0 +1,84 @@
+{
+  "capture": {
+    "folder": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/logs/capture_20260921_101139",
+    "frames": 372,
+    "duration_s": 42.28,
+    "median_interval_s": 0.12400000000000055,
+    "maximum_gap_s": 0.1490000000000009,
+    "timing": "Recorded manifest save times (not exact exposure times)",
+    "timing_metadata_sha256": "5ff6f371b5a762b335c5a71ad5e5cad79471901ac14b956077c24617af57ac6c"
+  },
+  "config": {
+    "recovery_seconds": 2.0,
+    "max_speed": 30.0,
+    "max_accel": 100.0,
+    "max_radius": 14.0,
+    "jitter": 2.0,
+    "mahalanobis_limit": 9.21,
+    "size_ratio": 1.8,
+    "ambiguity_margin": 0.15,
+    "min_hits": 2,
+    "recovery_hits": 2,
+    "edge_margin": 5.0,
+    "low_conf": 0.068,
+    "max_rois": 6
+  },
+  "tracker": "auto",
+  "weights": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v5/best.pt",
+  "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
+  "started": "2026-10-23T10:57:44.315721+08:00",
+  "status": "stopped",
+  "source_unchanged": true,
+  "accuracy_measured": false,
+  "engine_files": {
+    "integrated_launcher_v2.py": "962309724d660457ba163f62897dcf32136f8657559a120cb1bb84a655c62c1d",
+    "tracking_router.py": "64f5544f6fd154bd543845530520b7d4df04b6265056b24f7911770b80a237e7",
+    "faster_k.py": "124740d95c1a486452c42faf0bea324b6e84663c2b2203929213cb30fefa33bd",
+    "precise_k.py": "29a6e5fd535f07dca6856eeda0e52d8a7447d6dd1d6ce2a57a0c2f5cfe689829",
+    "crowd_detector.py": "db4a057619a1347be8b89975cd1f75fe517f32f2ce8cd186019cdde601fded95"
+  },
+  "normal_confidence": 0.19,
+  "heat_config": {
+    "low_c": 25.0,
+    "high_c": 38.0,
+    "near_weight": 1.0,
+    "far_weight": 3.0,
+    "power": 1.0,
+    "area": 400.0,
+    "a": 0.49,
+    "b": 0.51,
+    "warmup_s": 5.0,
+    "switch_window_s": 30.0,
+    "max_precise_entries": 1
+  },
+  "processed_frames": 123,
+  "modes": {
+    "faster": 123
+  },
+  "unique_observed_ids": 54,
+  "mode_switches": 0,
+  "interpretation": "Detection/tracking diagnostics only. Existing labels are not treated as identity/count ground truth.",
+  "observed_min": 0,
+  "observed_max": 22,
+  "observed_mean": 12.658536585365853,
+  "maximum_unresolved": 11,
+  "timing_ms": {
+    "processing": {
+      "median": 290.636124991579,
+      "p95": 321.3476582983276
+    },
+    "base_detector": {
+      "median": 51.4733339950908,
+      "p95": 56.61373280745465
+    },
+    "recovery_detector": {
+      "median": 234.91845800890587,
+      "p95": 260.91274130449165
+    },
+    "tracking": {
+      "median": 4.072457988513634,
+      "p95": 6.160358097986318
+    }
+  },
+  "timing_note": "Measured on this computer; includes first-frame warm-up; excludes playback waiting, rendering and log writes."
+}
