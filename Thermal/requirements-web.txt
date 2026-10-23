@@ -1,0 +1,5 @@
+# Minimal web-workspace environment. Existing compatible Thermal venv can be reused.
+# No React/Node, web-server framework or native desktop GUI dependency required.
+numpy>=1.26
+opencv-python>=4.8
+ultralytics==8.4.125
