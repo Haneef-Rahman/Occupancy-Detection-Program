@@ -1,5 +1,5 @@
 {
-  "status": "running",
+  "status": "completed",
   "experimental": true,
   "config": {
     "recovery_seconds": 2.0,
@@ -47,5 +47,8 @@
   "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
   "timestamp_kind": "host-receipt-not-exposure",
   "started": "2026-10-23T10:34:09.471130+08:00",
-  "frames": 0
+  "frames": 26,
+  "dataset_captures": [],
+  "dataset_frames": 0,
+  "elapsed_seconds": 643.2805144999875
 }

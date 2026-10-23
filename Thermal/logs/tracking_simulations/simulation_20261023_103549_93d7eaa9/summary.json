@@ -27,7 +27,7 @@
   "weights": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v5/best.pt",
   "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
   "started": "2026-10-23T10:35:49.388915+08:00",
-  "status": "paused",
+  "status": "stopped",
   "source_unchanged": true,
   "accuracy_measured": false,
   "engine_files": {

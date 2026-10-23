@@ -176,3 +176,15 @@ Default eligibility requires five continuous recorded seconds in Faster K and at
 Compressed time mode anchors the x-axis at zero and maintains an at-most-240-point decimated overview. Moving mode retains the last 120 processed samples. The header toggles these modes; neither changes frame timestamps. EXPERIMENTAL and LIVE/REPLAY badges have been removed.
 
 Validation: 56 existing tests plus six heat tests passed (band inclusivity, finite pixels, direction weighting, exact blend, gating, reversal and invalid configuration). Native real-v5 replay verified settings opening, axis toggling, eligible heat metrics and immediate hiding after a switch to Precise K. Eligibility warmup was set to zero only for that short UI check; production defaults remain five seconds. Workspace evidence: experiments/heat_diagnostic/validation/report.json. Field calibration and any improvement in stability or accuracy remain unvalidated.
+
+
+## Heat diagnostic enabled in Launcher — 23 October 2026
+
+The approved heat diagnostic now runs in integrated_launcher_v2.py as well as Simulator. Both tabs expose Heat settings and use the same formula, provisional defaults, continuous Faster K eligibility and immediate Precise K exclusion. Launcher runs the calculation on native Celsius frames before recording history; detector/tracker outputs and dataset labels are unaffected. Settings changes are queued between frames, logged in controls.jsonl and reflected in session.json. Tracker resets, including live resume resets, restart heat eligibility. Settings dialogs retain their originating tab as the command destination.
+
+Validation: 62 automated tests passed. Native Launcher replay with real v5 CPU inference confirmed eligible heat metrics, the settings window, Precise K suppression and continuous recording (three processed frames, three dataset frames). Warmup was zero only in this short check; default remains five seconds. Evidence: workspace experiments/launcher_heat/validation-104241/report.json. Physical live-camera operation was not exercised in this check.
+
+
+## Integer heat and revised Detected — 23 October 2026
+
+Both tabs now calculate baseline=raw full-frame detections+max(observed,estimate), Fh=floor(a*rFh+b*baseline), and displayed Detected=Fh+raw full-frame detections. The original blend input is retained as blend_detected in frame logs to avoid circular feedback through the revised Detected output. rFh remains continuous; Fh and Detected are integers in new logs, graph metrics and tooltips. Gating and detector/tracker behavior are unchanged. This supersedes earlier Detected/Fh formulas above.
