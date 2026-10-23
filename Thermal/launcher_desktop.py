@@ -170,7 +170,7 @@ class NativeLauncher:
             if syncing[0]:return
             syncing[0]=True;variables[target].set(round(1-variables[source].get(),2));syncing[0]=False
         variables['a'].trace_add('write',lambda *_:blend('a','b'));variables['b'].trace_add('write',lambda *_:blend('b','a'))
-        message=tk.StringVar(top,value='Test band only. Fₕ is floored; Detected = Fₕ + raw. Blend uses the original detection baseline.')
+        message=tk.StringVar(top,value='Test band only. Fₕ is floored; Detected = Fₕ + raw boxes without a visible tracking ID. Blend uses the original detection baseline.')
         tk.Label(top,textvariable=message,bg='#111111',fg='#bbbbbb',wraplength=510).grid(row=11,column=0,columnspan=2,pady=8)
         def apply():
             try:

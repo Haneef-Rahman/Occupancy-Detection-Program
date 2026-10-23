@@ -83,7 +83,7 @@ class TrackingSession:
             raise ValueError('expected native 160x120 float Celsius frame')
         t0 = time.perf_counter()
         image = thermal_image(data)
-        high = self.detector.base(image)
+        high = [dict(d,detection_index=i,track_id=None) for i,d in enumerate(self.detector.base(image))]
         t1 = time.perf_counter()
         if self.mode != 'auto' and self.router.mode != self.mode:
             if self.router.previous_time is None:self.router.mode=self.mode
@@ -96,6 +96,13 @@ class TrackingSession:
         t4 = time.perf_counter()
         self.frame += 1
         router = self.router
+        # Exact per-frame detection provenance survives the track payload copy.
+        # Only currently displayed/confirmed base tracks give raw boxes an ID;
+        # recovery observations must not remove an unrelated full-frame box.
+        for track in router.observed():
+            if track.det.get('source','base')=='base' and track.misses==0:
+                index=track.det.get('detection_index')
+                if index is not None and 0<=index<len(high):high[index]['track_id']=track.id
         row = {'frame': self.frame, 'time': timestamp, 'origin': origin, 'mode': router.mode,
                'normal_confidence': getattr(self.detector,'conf',None),
                'recovery_confidence': getattr(self.detector,'low_conf',None),

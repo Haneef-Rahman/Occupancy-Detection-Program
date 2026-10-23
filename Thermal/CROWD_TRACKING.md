@@ -188,3 +188,8 @@ Validation: 62 automated tests passed. Native Launcher replay with real v5 CPU i
 ## Integer heat and revised Detected — 23 October 2026
 
 Both tabs now calculate baseline=raw full-frame detections+max(observed,estimate), Fh=floor(a*rFh+b*baseline), and displayed Detected=Fh+raw full-frame detections. The original blend input is retained as blend_detected in frame logs to avoid circular feedback through the revised Detected output. rFh remains continuous; Fh and Detected are integers in new logs, graph metrics and tooltips. Gating and detector/tracker behavior are unchanged. This supersedes earlier Detected/Fh formulas above.
+
+
+## Detected correction — 23 October 2026
+
+Displayed Detected now equals floored Fh plus only raw full-frame detections without a currently visible tracking ID. TrackingSession tags each raw detection with its per-frame detection_index; the actual confirmed/current base track payload supplies track_id through this index. Tentative boxes whose IDs are not displayed count as untracked. Recovery observations do not subtract unrelated base boxes. This avoids proximity guesses and subtracting the total track count from the raw count. The heat blend baseline remains the original sum, separately logged, avoiding circular feedback. Frame logs expose track_id on raw detections and untracked_raw on eligible heat diagnostics.

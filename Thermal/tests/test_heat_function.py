@@ -20,6 +20,26 @@ class HeatTests(unittest.TestCase):
   self.assertEqual(r['detected'],5)
   again=row(1);f.update(np.zeros((2,2)),again)
   self.assertEqual(again['heat'],3);self.assertEqual(again['detected'],5)
+ def test_only_untracked_raw_boxes_are_added(self):
+  f=HeatFunction(HeatConfig(warmup_s=0,area=1));r=row(0)
+  r['base_detections']=[{'track_id':7},{'track_id':None}]
+  f.update(np.full((2,2),30.),r)
+  self.assertEqual(r['untracked_raw'],1);self.assertEqual(r['detected'],r['heat']+1)
+  r=row(1);r['base_detections']=[{'track_id':7},{'track_id':8}]
+  f.update(np.full((2,2),30.),r)
+  self.assertEqual(r['untracked_raw'],0);self.assertEqual(r['detected'],r['heat'])
+ def test_track_provenance_matches_visible_ids(self):
+  from integrated_launcher_v2 import TrackingSession
+  class Detector:
+   conf=.374;low_conf=.18
+   def base(self,image):return [dict(bbox=(57,41,6,8),centroid=(60,45),conf=.8,source='base',body_h=8/.3)]
+   def recover(self,image,regions):return []
+  session=TrackingSession(Detector(),mode='faster');data=np.full((120,160),30,np.float32)
+  first=session.process(data,0)
+  self.assertIsNone(first['base_detections'][0]['track_id'])
+  second=session.process(data,.1)
+  self.assertEqual(second['base_detections'][0]['track_id'],second['observed'][0]['id'])
+  self.assertEqual(second['base_detections'][0]['detection_index'],0)
  def test_top_higher_than_bottom_and_raw_unchanged(self):
   c=HeatConfig(warmup_s=0,area=1);a=np.array([[30.,0],[0,0]]);b=np.flipud(a).copy();original=a.copy()
   self.assertGreater(HeatFunction(c).update(a,row(0))['raw_heat'],HeatFunction(c).update(b,row(0))['raw_heat'])

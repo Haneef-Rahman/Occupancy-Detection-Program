@@ -38,7 +38,7 @@ class HeatFunction:
         elif self.previous!='faster' or self.faster_since is None:self.faster_since=t
         active=mode=='faster' and t-self.faster_since>=c.warmup_s and len(self.entries)<=c.max_precise_entries
         self.previous=mode;self.previous_t=t
-        result=dict(heat_active=active,raw_heat=None,heat=None,detected=None,blend_detected=None,heat_band_pixels=None)
+        result=dict(heat_active=active,raw_heat=None,heat=None,detected=None,blend_detected=None,untracked_raw=None,heat_band_pixels=None)
         if active:
             y=np.linspace(1.,0.,data.shape[0])[:,None]
             weights=c.near_weight+(c.far_weight-c.near_weight)*y**c.power
@@ -49,6 +49,7 @@ class HeatFunction:
             # is an output and must not recursively feed back into this frame.
             baseline=raw_detections+max(len(row['observed']),row['estimate'])
             heat=math.floor(c.a*raw+c.b*baseline)
-            result.update(raw_heat=raw,blend_detected=baseline,detected=heat+raw_detections,
+            untracked=sum(d.get('track_id') is None for d in row['base_detections'])
+            result.update(raw_heat=raw,blend_detected=baseline,untracked_raw=untracked,detected=heat+untracked,
                           heat=heat,heat_band_pixels=int(mask.sum()))
         row.update(result);return result
