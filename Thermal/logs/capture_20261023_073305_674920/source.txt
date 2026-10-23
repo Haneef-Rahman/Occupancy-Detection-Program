@@ -1,0 +1,7 @@
+recorder   integrated_launcher_v2.py
+weights    /Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v5/best.pt
+conf       0.374
+classes    omega only (class 1)
+labels     full-frame YOLO only; no recovery or predicted boxes
+kind       manual shots
+note       

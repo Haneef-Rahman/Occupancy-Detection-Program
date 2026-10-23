@@ -1,0 +1,6 @@
+{"stem": "cap_000000", "origin": "live-host-receipt", "time": 147334.536111583, "normal_confidence": 0.374, "recovery_confidence": 0.18, "tracker_policy": "auto", "active_tracker": "precise", "label_source": "base YOLO only"}
+{"stem": "cap_000001", "origin": "live-host-receipt", "time": 147335.560136791, "normal_confidence": 0.374, "recovery_confidence": 0.18, "tracker_policy": "auto", "active_tracker": "precise", "label_source": "base YOLO only"}
+{"stem": "cap_000002", "origin": "live-host-receipt", "time": 147336.584451833, "normal_confidence": 0.374, "recovery_confidence": 0.18, "tracker_policy": "auto", "active_tracker": "precise", "label_source": "base YOLO only"}
+{"stem": "cap_000003", "origin": "live-host-receipt", "time": 147337.384036791, "normal_confidence": 0.374, "recovery_confidence": 0.18, "tracker_policy": "auto", "active_tracker": "precise", "label_source": "base YOLO only"}
+{"stem": "cap_000004", "origin": "live-host-receipt", "time": 147338.183964666, "normal_confidence": 0.374, "recovery_confidence": 0.18, "tracker_policy": "auto", "active_tracker": "precise", "label_source": "base YOLO only"}
+{"stem": "cap_000005", "origin": "live-host-receipt", "time": 147340.360179333, "normal_confidence": 0.374, "recovery_confidence": 0.18, "tracker_policy": "auto", "active_tracker": "precise", "label_source": "base YOLO only"}
