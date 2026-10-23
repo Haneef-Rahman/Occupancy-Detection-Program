@@ -24,11 +24,37 @@ class HeatConfig:
         if not 0<=self.a<.5<self.b<=1 or not math.isclose(self.a+self.b,1.,abs_tol=1e-6):raise ValueError('Require a < 0.5, b > 0.5 and a + b = 1')
         if self.warmup_s<0 or self.switch_window_s<=0 or self.max_precise_entries<0 or int(self.max_precise_entries)!=self.max_precise_entries:raise ValueError('Invalid gating settings')
 
+class PlausibleDetected:
+    """Hold a detection peak; accumulated whole heat units adjust its count.
+
+    Current Detected is always a floor. A detection-driven increase or a
+    blocked decrease reanchors the heat reference, avoiding deferred changes.
+    This diagnostic never feeds the detector or tracker.
+    """
+    def __init__(self):self.reset()
+    def reset(self):self.value=None;self.reference=None
+    def update(self,detected,raw_heat):
+        if self.value is None:
+            self.value=int(detected);self.reference=float(raw_heat)
+        else:
+            change=float(raw_heat)-self.reference
+            nearest=round(change)
+            if math.isclose(change,nearest,rel_tol=0.,abs_tol=1e-9):change=nearest
+            # Truncate toward zero: sub-unit decreases must not round to -1.
+            steps=math.trunc(change)
+            candidate=max(0,self.value+steps)
+            if detected>candidate:
+                self.value=int(detected);self.reference=float(raw_heat)
+            else:
+                self.value=candidate;self.reference+=steps
+        return self.value
+
 class HeatFunction:
     def __init__(self,config=None):
         self.config=config or HeatConfig();self.reset()
     def reset(self):
         self.previous=None;self.previous_t=None;self.faster_since=None;self.entries=deque()
+        self.plausible=PlausibleDetected()
     def update(self,data,row):
         c=self.config;t=float(row['time']);mode=row['mode']
         if self.previous_t is not None and t<=self.previous_t:self.reset()
@@ -38,7 +64,7 @@ class HeatFunction:
         elif self.previous!='faster' or self.faster_since is None:self.faster_since=t
         active=mode=='faster' and t-self.faster_since>=c.warmup_s and len(self.entries)<=c.max_precise_entries
         self.previous=mode;self.previous_t=t
-        result=dict(heat_active=active,raw_heat=None,heat=None,detected=None,blend_detected=None,untracked_raw=None,heat_band_pixels=None)
+        result=dict(heat_active=active,raw_heat=None,heat=None,detected=None,plausible_detected=None,blend_detected=None,untracked_raw=None,heat_band_pixels=None)
         if active:
             y=np.linspace(1.,0.,data.shape[0])[:,None]
             weights=c.near_weight+(c.far_weight-c.near_weight)*y**c.power
@@ -52,4 +78,6 @@ class HeatFunction:
             untracked=sum(d.get('track_id') is None for d in row['base_detections'])
             result.update(raw_heat=raw,blend_detected=baseline,untracked_raw=untracked,detected=heat+untracked,
                           heat=heat,heat_band_pixels=int(mask.sum()))
+            result['plausible_detected']=self.plausible.update(result['detected'],raw)
+        else:self.plausible.reset()
         row.update(result);return result

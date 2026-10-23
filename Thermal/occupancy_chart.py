@@ -21,7 +21,7 @@ class OccupancyHistory:
         if self.start is None:self.start=timestamp
         self.samples.append(dict(frame=row['frame'],timestamp=timestamp,t=timestamp-self.start,
             estimate=int(row['estimate']),observed=len(row['observed']),mode=row['mode']))
-        for name in ('heat_active','raw_heat','heat','detected'):
+        for name in ('heat_active','raw_heat','heat','detected','plausible_detected'):
             self.samples[-1][name]=row.get(name)
         self.overview.append(dict(self.samples[-1]))
         if len(self.overview)>240:self.overview=self.overview[:-1:2]+[self.overview[-1]]

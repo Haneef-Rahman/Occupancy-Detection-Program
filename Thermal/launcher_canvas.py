@@ -7,6 +7,10 @@ import time
 from functools import lru_cache
 
 BG='#090909';CARD='#111111';BORDER='#2b2b2b';TEXT='#f2f2f2';MUTED='#919191'
+HEAT_SERIES=(('detected','Detected','#bbbbbb',(2,4)),
+             ('raw_heat','rFₕ','#777777',(7,3)),
+             ('heat','Fₕ','#ffffff',None),
+             ('plausible_detected','pD','#dddddd',(10,3,2,3)))
 
 class Dashboard:
     def __init__(self,canvas,ui):
@@ -74,12 +78,15 @@ class Dashboard:
         self.text('Observed',lx+142,y+13,11,'#bbbbbb')
         active=row.get('heat_active',False) and row['mode']=='faster'
         if active:
-            for i,(field,label) in enumerate([('detected','Detected'),('raw_heat','rFₕ'),('heat','Fₕ')]):
-                self.text(f'{label} {row[field]:g}',x+16+i*150,y+53,11,('#bbbbbb','#777777','#ffffff')[i])
+            for i,(field,label,color,dash) in enumerate(HEAT_SERIES):
+                value=row.get(field);display=f'{value:g}' if value is not None else '—'
+                xx=x+16+i*(w-32)/4
+                c.create_line(xx,y+60,xx+16,y+60,fill=color,width=2,dash=dash)
+                self.text(f'{label} {display}',xx+22,y+53,11,color,tags=f'metric:{field}')
         left=x+47;right=x+w-18;top=y+(80 if active else 66);bottom=y+h-42
         self.chart_bounds=(left,top,right,bottom);self.chart_points=[]
         samples=(u.state.get('overview') or u.state.get('history',[])) if u.axis_mode=='compressed' else u.state.get('history',[])
-        maximum=max([2]+[max(s['estimate'],s['observed'],*[s.get(k) or 0 for k in ('detected','raw_heat','heat')] if active else [0]) for s in samples]);step=max(1,math.ceil(maximum/3));maximum=step*3
+        maximum=max([2]+[max(s['estimate'],s['observed'],*[s.get(k) or 0 for k,_,_,_ in HEAT_SERIES] if active else [0]) for s in samples]);step=max(1,math.ceil(maximum/3));maximum=step*3
         if samples:
             t0=0. if u.axis_mode=='compressed' else samples[0]['t'];span=samples[-1]['t']-t0
             def px(t):return left+(t-t0)/span*(right-left) if span else right
@@ -104,10 +111,12 @@ class Dashboard:
                 else:
                     xx,yy=points[0];c.create_oval(xx-2,yy-2,xx+2,yy+2,fill=color,outline='')
             if active:
-                for field,color,dash in [('detected','#bbbbbb',(2,4)),('raw_heat','#777777',(7,3)),('heat','#ffffff',None)]:
+                for field,label,color,dash in HEAT_SERIES:
                     segment=[]
                     def flush():
-                        if len(segment)>1:c.create_line(*[v for pt in segment for v in pt],fill=color,width=2 if field=='heat' else 1,dash=dash)
+                        if len(segment)>1:c.create_line(*[v for pt in segment for v in pt],fill=color,width=2 if field in ('heat','plausible_detected') else 1,dash=dash,tags=f'series:{field}')
+                        elif segment:
+                            xx,yy=segment[0];c.create_oval(xx-2,yy-2,xx+2,yy+2,fill=color,outline='',tags=f'series:{field}')
                     for sample in samples:
                         value=sample.get(field) if sample.get('heat_active') else None
                         if value is None:flush();segment=[]
@@ -140,7 +149,8 @@ class Dashboard:
         if self.ui.row and self.ui.row.get('heat_active') and s.get('heat_active'):
             self.rounded(tx,ty+82,180,58,8,'#1c1c1c','#444444',tags='hover')
             self.text(f'Detected {s["detected"]:g} · rFₕ {s["raw_heat"]:.1f}',tx+10,ty+90,11,tags='hover')
-            self.text(f'Fₕ {s["heat"]:g}',tx+10,ty+112,11,bold=True,tags='hover')
+            pd=s.get('plausible_detected');display=f'{pd:g}' if pd is not None else '—'
+            self.text(f'Fₕ {s["heat"]:g} · pD {display}',tx+10,ty+112,11,bold=True,tags='hover')
 
     def thermal(self,data,row,bounds):
         from PIL import Image,ImageTk,ImageDraw
