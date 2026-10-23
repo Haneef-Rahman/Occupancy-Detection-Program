@@ -124,6 +124,7 @@ def main():
     p.add_argument('--kelvin-per-count',type=float,choices=[.01,.1],required=True,help='Confirmed sensor TLinear scale; do not guess from palette')
     p.add_argument('--note',default='')
     p.add_argument('--out',type=Path)
+    p.add_argument('--resume',type=Path,help='Resume confirmed pairs without overwriting them')
     p.add_argument('--annotate-on-windows',action='store_true')
     p.add_argument('--alignment',type=Path,default=DEFAULT_ALIGNMENT,help='Mount preset; a copy is saved inside each recording')
     p.add_argument('--experimental-annotator',action='store_true')
@@ -134,18 +135,28 @@ def main():
     load_alignment(a.alignment)
     if a.interval<.5 or a.count<0: p.error('interval must be >=0.5; count >=0')
     stamp=datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    root=a.out or Path(__file__).resolve().parent/'paired_recordings'/('capture_'+stamp)
-    root.mkdir(parents=True,exist_ok=False)
+    if a.resume and a.out:p.error('--resume and --out are mutually exclusive')
+    root=a.resume or a.out or Path(__file__).resolve().parent/'paired_recordings'/('capture_'+stamp)
+    saved=None
+    if a.resume:
+        saved=json.loads((root/'pairs.json').read_text())
+        if saved['temperature_kelvin_per_count']!=a.kelvin_per_count:raise ValueError('Resume temperature scale mismatch')
+        if sha256(root/'alignment.json')!=sha256(a.alignment):raise ValueError('Resume alignment mismatch')
+        for i,item in enumerate(saved['pairs']):
+            if item['stem']!=f'cap_{i:06d}' or not (root/'npy'/(item['stem']+'.npy')).is_file():raise ValueError('Resume frame sequence incomplete')
+    else:root.mkdir(parents=True,exist_ok=False)
     import shutil
-    shutil.copy2(a.alignment,root/'alignment.json')
-    for sub in ['npy','png','labels','review','rgb','thermal_raw']: (root/sub).mkdir()
-    (root/'classes.txt').write_text('person\nhead_shoulder\n')
-    (root/'source.txt').write_text('recorder Faster_dataset_recording.py\nRGB/thermal pending annotation; no human labels\n'+a.note+'\n')
-    rows=[];cam=None;esp=None;fh=None;complete=False
+    if not a.resume:
+        shutil.copy2(a.alignment,root/'alignment.json')
+        for sub in ['npy','png','labels','review','rgb','thermal_raw']: (root/sub).mkdir()
+        (root/'classes.txt').write_text('person\nhead_shoulder\n')
+        (root/'source.txt').write_text('recorder Faster_dataset_recording.py\nRGB/thermal pending annotation; no human labels\n'+a.note+'\n')
+    rows=saved['pairs'] if saved else [];cam=None;esp=None;fh=None;complete=False;capture_failed=False
     try:
         cam=open_thermal_stream()
         esp=CameraSerial(a.port)
-        fh=(root/'manifest.csv').open('w',newline='');writer=csv.writer(fh);writer.writerow(base.MANIFEST_COLS)
+        fh=(root/'manifest.csv').open('a' if a.resume else 'w',newline='');writer=csv.writer(fh)
+        if not a.resume:writer.writerow(base.MANIFEST_COLS)
         persist(root,rows,'recording',a)
         recording=a.count>0;next_capture=0;waiting_since=time.monotonic()
         if not a.count: cv2.namedWindow('Faster paired recorder',cv2.WINDOW_NORMAL)
@@ -163,7 +174,13 @@ def main():
             if key==ord('r'): recording=not recording
             if key==ord('s') or (recording and time.monotonic()>=next_capture):
                 ident='p'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')
-                m=esp.capture(ident)
+                try:m=esp.capture(ident)
+                except (TimeoutError,OSError,serial.SerialException) as error:
+                    capture_failed=True
+                    with (root/'capture_errors.jsonl').open('a') as errors:
+                        errors.write(json.dumps(dict(id=ident,time=datetime.now(timezone.utc).isoformat(),error=str(error),confirmed_pairs=len(rows)))+'\n')
+                    print(f'ESP capture interrupted: {error}. {len(rows)} confirmed pairs preserved. Reconnect ESP USB and resume this folder.',flush=True)
+                    break
                 target=(m['pc_sent_epoch_us']+m['pc_ack_epoch_us'])//2
                 frames=cam.snapshot();ts,seq,raw=min(frames,key=lambda f:abs(f[0]-target))
                 if abs(ts-target)>1_000_000: raise RuntimeError('No recent thermal frame; capture rejected')
@@ -179,9 +196,12 @@ def main():
                 if a.count and len(rows)>=a.count: break
         cam.release();cam=None
         cv2.destroyAllWindows()
+        if capture_failed:return
         persist(root,rows,'downloading',a)
         for m in rows:
-            esp.download(m,root/'rgb'/(m['stem']+'.jpg'));m['download_verified']=True
+            rgb=root/'rgb'/(m['stem']+'.jpg')
+            if m.get('download_verified') and rgb.exists() and hashlib.sha256(rgb.read_bytes()).hexdigest()==m.get('rgb_sha256'):continue
+            esp.download(m,rgb);m['download_verified']=True
             persist(root,rows,'downloading',a);print('Downloaded',m['stem'],flush=True)
         complete=bool(rows)
     finally:

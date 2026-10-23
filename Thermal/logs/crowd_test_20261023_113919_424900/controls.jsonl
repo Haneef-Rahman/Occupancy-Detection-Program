@@ -1,0 +1,11 @@
+{"action": "g", "frame": 107, "conf": 0.374, "search_conf": 0.18, "policy": "auto", "palette": 0, "contrast": 0}
+{"action": "2", "frame": 275, "conf": 0.374, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "slider/conf", "frame": 341, "conf": 0.541, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "c", "frame": 661, "conf": 0.541, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "g", "frame": 668, "conf": 0.541, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "slider/conf", "frame": 739, "conf": 0.667, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "slider/conf", "frame": 756, "conf": 0.653, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "slider/conf", "frame": 3031, "conf": 0.551, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "g", "frame": 3082, "conf": 0.551, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
+{"action": "3", "frame": 3185, "conf": 0.551, "search_conf": 0.18, "policy": "faster", "palette": 0, "contrast": 0}
+{"action": "2", "frame": 3216, "conf": 0.551, "search_conf": 0.18, "policy": "precise", "palette": 0, "contrast": 0}
