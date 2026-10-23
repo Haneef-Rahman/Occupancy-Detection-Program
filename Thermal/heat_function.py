@@ -6,14 +6,14 @@ import numpy as np
 
 @dataclass(frozen=True)
 class HeatConfig:
-    low_c:float=25.
-    high_c:float=38.
+    low_c:float=28.
+    high_c:float=37.
     near_weight:float=1.
     far_weight:float=3.
     power:float=1.
     area:float=400.
-    a:float=.25
-    b:float=.75
+    a:float=.3
+    b:float=.7
     warmup_s:float=5.
     switch_window_s:float=30.
     max_precise_entries:int=1

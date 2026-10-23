@@ -16,7 +16,7 @@ class HeatTests(unittest.TestCase):
  def test_floor_is_not_round_and_outputs_do_not_feed_back(self):
   f=HeatFunction(HeatConfig(warmup_s=0,area=1000))
   r=row(0);f.update(np.zeros((2,2)),r)
-  self.assertEqual(r['heat'],3) # floor(.75 * 5) = 3, not 4
+  self.assertEqual(r['heat'],3) # floor(.7 * 5) = 3, not 4
   self.assertEqual(r['detected'],5)
   again=row(1);f.update(np.zeros((2,2)),again)
   self.assertEqual(again['heat'],3);self.assertEqual(again['detected'],5)
@@ -57,6 +57,6 @@ class HeatTests(unittest.TestCase):
   for values in [dict(a=.5,b=.5),dict(a=.2,b=.9),dict(area=0),dict(low_c=40,high_c=20),dict(far_weight=.5),dict(power=float('nan'))]:
    with self.assertRaises(ValueError):HeatConfig(**values)
  def test_nan_does_not_count(self):
-  r=HeatFunction(HeatConfig(warmup_s=0)).update(np.array([[np.nan,np.inf],[25.,38.]]),row(0))
+  r=HeatFunction(HeatConfig(warmup_s=0)).update(np.array([[np.nan,np.inf],[28.,37.]]),row(0))
   self.assertEqual(r['heat_band_pixels'],2)
 if __name__=='__main__':unittest.main()

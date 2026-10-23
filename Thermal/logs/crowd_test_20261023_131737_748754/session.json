@@ -1,5 +1,5 @@
 {
-  "status": "running",
+  "status": "completed",
   "experimental": true,
   "config": {
     "recovery_seconds": 2.0,
@@ -47,5 +47,21 @@
   "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
   "timestamp_kind": "host-receipt-not-exposure",
   "started": "2026-10-23T13:17:37.753509+08:00",
-  "frames": 0
+  "frames": 68,
+  "heat_config": {
+    "low_c": 25.0,
+    "high_c": 38.0,
+    "near_weight": 1.0,
+    "far_weight": 3.0,
+    "power": 1.0,
+    "area": 400.0,
+    "a": 0.25,
+    "b": 0.75,
+    "warmup_s": 5.0,
+    "switch_window_s": 30.0,
+    "max_precise_entries": 1
+  },
+  "dataset_captures": [],
+  "dataset_frames": 0,
+  "elapsed_seconds": 463.0853202919825
 }
