@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "status": "ready_for_annotation",
+  "temperature_kelvin_per_count": 0.01,
+  "timing_validated": false,
+  "reviewed": false,
+  "pairs": [
+    {
+      "id": "p20261023T043031531235",
+      "pc_sent_epoch_us": 1792729831532076,
+      "command_received_boot_us": 15470280,
+      "frame_first_dma_boot_us": 15713560,
+      "saved_verified_boot_us": 16216089,
+      "width": 1600,
+      "height": 1200,
+      "bytes": 113280,
+      "crc32": 1543665440,
+      "timing_note": "PC and ESP clocks are not synchronized; DMA timestamp is not exact exposure time",
+      "pc_ack_epoch_us": 1792729832516440,
+      "stem": "cap_000000",
+      "thermal_host_receipt_epoch_us": 1792729832064581,
+      "thermal_sequence": 147,
+      "pairing_receipt_residual_ms": 40.323,
+      "download_verified": true,
+      "rgb_sha256": "0b41191c7bf4c29658daf424caa090c12999d656a43217b8b4d8706c52a8a9ac"
+    },
+    {
+      "id": "p20261023T043103998971",
+      "pc_sent_epoch_us": 1792729863999051,
+      "command_received_boot_us": 47937301,
+      "frame_first_dma_boot_us": 48160307,
+      "saved_verified_boot_us": 48638200,
+      "width": 1600,
+      "height": 1200,
+      "bytes": 100007,
+      "crc32": 1946441589,
+      "timing_note": "PC and ESP clocks are not synchronized; DMA timestamp is not exact exposure time",
+      "pc_ack_epoch_us": 1792729864941879,
+      "stem": "cap_000001",
+      "thermal_host_receipt_epoch_us": 1792729864513588,
+      "thermal_sequence": 432,
+      "pairing_receipt_residual_ms": 43.123,
+      "download_verified": true,
+      "rgb_sha256": "f28fcf21d1b8b8ef72ade248773bf571e84d7160533613533686bae1182f789b"
+    }
+  ],
+  "alignment_file": "alignment.json",
+  "alignment_sha256": "a0d0ca4dbc3b11b7914c76e85a83780fe8503b37425620a8ea078d9c3052857d",
+  "timing_method": "nearest thermal host receipt to midpoint of RGB command-send and saved-ack; not exposure synchronization"
+}

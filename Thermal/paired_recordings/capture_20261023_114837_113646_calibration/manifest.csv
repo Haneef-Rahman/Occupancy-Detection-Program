@@ -1,0 +1,10 @@
+file,timestamp,view,background,threshold,n_det,omega_count,omega_score,flags,note,conf
+cap_000000,2026-10-23T11:49:05.256,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000001,2026-10-23T11:49:19.342,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000002,2026-10-23T11:56:10.436,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000003,2026-10-23T11:56:22.049,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000004,2026-10-23T11:56:37.458,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000005,2026-10-23T11:56:42.635,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000006,2026-10-23T11:57:02.054,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000007,2026-10-23T11:57:24.003,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,
+cap_000008,2026-10-23T11:57:41.706,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 16 guided fit captures + 8 separate validation captures; do not add to training automatically,

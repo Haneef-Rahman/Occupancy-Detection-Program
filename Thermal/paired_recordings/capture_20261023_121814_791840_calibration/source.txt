@@ -1,0 +1,3 @@
+recorder Faster_dataset_recording.py
+RGB/thermal pending annotation; no human labels
+C1 calibration only; 4 corner fit captures + 2 separate validation captures; do not add to training automatically

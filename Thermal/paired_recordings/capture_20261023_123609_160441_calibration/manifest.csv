@@ -1,0 +1,6 @@
+file,timestamp,view,background,threshold,n_det,omega_count,omega_score,flags,note,conf
+cap_000000,2026-10-23T12:36:42.842,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 8 outer-area fit captures + 2 separate validation captures; do not add to training automatically,
+cap_000001,2026-10-23T12:36:45.707,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 8 outer-area fit captures + 2 separate validation captures; do not add to training automatically,
+cap_000002,2026-10-23T12:36:49.813,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 8 outer-area fit captures + 2 separate validation captures; do not add to training automatically,
+cap_000003,2026-10-23T12:36:53.909,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 8 outer-area fit captures + 2 separate validation captures; do not add to training automatically,
+cap_000004,2026-10-23T12:36:58.880,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 8 outer-area fit captures + 2 separate validation captures; do not add to training automatically,

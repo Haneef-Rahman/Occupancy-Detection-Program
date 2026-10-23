@@ -1,0 +1,5 @@
+file,timestamp,view,background,threshold,n_det,omega_count,omega_score,flags,note,conf
+cap_000000,2026-10-23T12:19:42.782,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 4 corner fit captures + 2 separate validation captures; do not add to training automatically,
+cap_000001,2026-10-23T12:19:57.487,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 4 corner fit captures + 2 separate validation captures; do not add to training automatically,
+cap_000002,2026-10-23T12:20:41.874,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 4 corner fit captures + 2 separate validation captures; do not add to training automatically,
+cap_000003,2026-10-23T12:21:36.262,horizontal,,,0,0,0.0000,YOLO-omega,C1 calibration only; 4 corner fit captures + 2 separate validation captures; do not add to training automatically,
