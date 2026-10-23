@@ -4,7 +4,8 @@ All exchanges are checksum verified. Interrupted jobs remain separate and can be
 import argparse, base64, hashlib, json, os, shutil, subprocess, sys, tempfile, uuid
 from pathlib import Path
 from remote_job import pack, unpack, digest
-from alignment_preset import resolve_session_alignment
+from alignment_preset import resolve_session_alignment,sha256
+from morph_field import MorphField,DEFAULT_MORPH
 SSH_CONFIG=Path.home()/'.ssh/occupancy_windows.conf'
 REMOTE='D:/fluxnet/automation'
 REPO=Path('/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal')
@@ -29,7 +30,7 @@ def download(root,job,kind,work):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='command',required=True)
-    a=sub.add_parser('annotate');a.add_argument('session',type=Path);a.add_argument('--alignment',type=Path,help='Override only for older sessions without a saved preset');a.add_argument('--experimental',action='store_true');a.add_argument('--experimental-annotator',action='store_true');a.add_argument('--logs',type=Path,default=REPO/'logs')
+    a=sub.add_parser('annotate');a.add_argument('session',type=Path);a.add_argument('--alignment',type=Path,help='Override only for older sessions without a saved preset');a.add_argument('--experimental',action='store_true');a.add_argument('--experimental-annotator',action='store_true');a.add_argument('--logs',type=Path,default=REPO/'logs');a.add_argument('--morph',type=Path,default=DEFAULT_MORPH)
     t=sub.add_parser('train');t.add_argument('dataset',type=Path);t.add_argument('--models',type=Path,default=REPO/'models');t.add_argument('--version',type=int,required=True)
     args=p.parse_args()
     if os.geteuid()==0:raise SystemExit('Run transfers as your normal Mac user, not sudo.')
@@ -38,6 +39,7 @@ def main():
         if (args.models/f'v{args.version}').exists():raise FileExistsError('Model version already exists')
     else:
         args.alignment=resolve_session_alignment(args.session,args.alignment)
+        MorphField(args.morph,sha256(args.alignment))
         if not args.session.name.startswith('capture_'):raise ValueError('Session name must start capture_')
         if (args.logs/args.session.name).exists():raise FileExistsError('Capture already exists in logs')
     job=REMOTE+'/jobs/'+uuid.uuid4().hex
@@ -46,9 +48,9 @@ def main():
         work=Path(tmp)
         if args.command=='annotate':
             if not args.experimental_annotator:raise ValueError('Current YOLOE candidate requires --experimental-annotator; it failed initial omega evaluation')
-            upload(args.session,job,'input',work);copy(args.alignment,'occupancy-windows:'+job+'/alignment.json')
+            upload(args.session,job,'input',work);copy(args.alignment,'occupancy-windows:'+job+'/alignment.json');copy(args.morph,'occupancy-windows:'+job+'/morph.json')
             extra=['--experimental-annotator']+(['--allow-experimental-alignment'] if args.experimental else [])
-            runpy('rgb_annotation_worker.py',job+'/input','--out',job+'/output','--alignment',job+'/alignment.json','--weights',REMOTE+'/yoloe-26x-seg.pt',*extra)
+            runpy('rgb_annotation_worker.py',job+'/input','--out',job+'/output','--alignment',job+'/alignment.json','--weights',REMOTE+'/yoloe-26x-seg.pt','--morph',job+'/morph.json',*extra)
             out=download(job+'/output',job,'returned',work)
             if not (out/'READY_FOR_REVIEW').is_file():raise ValueError('Annotation incomplete')
             if (out/'rgb_annotation.json').is_file() and json.loads((out/'rgb_annotation.json').read_text()).get('integration_test_only') and args.logs.resolve()==(REPO/'logs').resolve():raise ValueError('Integration tests must stay outside production logs')
