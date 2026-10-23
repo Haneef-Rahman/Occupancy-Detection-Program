@@ -1,0 +1,45 @@
+{
+  "workspace": "simulator",
+  "source": {
+    "kind": "replay",
+    "folder": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/logs/capture_20260922_143233",
+    "frames": 292,
+    "duration_s": 33.176,
+    "median_interval_s": 0.125,
+    "maximum_gap_s": 0.1349999999999998,
+    "timing": "Recorded manifest save times (not exact exposure times)",
+    "timing_metadata_sha256": "c60c75876063da2e9b541f3a5fccc0c85c905f0098fcd4d8715282e399fb7acb"
+  },
+  "weights": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v5/best.pt",
+  "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
+  "heat_config": {
+    "low_c": 28.0,
+    "high_c": 37.0,
+    "near_weight": 1.0,
+    "far_weight": 3.0,
+    "power": 1.0,
+    "area": 400.0,
+    "a": 0.3,
+    "b": 0.7,
+    "warmup_s": 5.0,
+    "switch_window_s": 30.0,
+    "max_precise_entries": 1
+  },
+  "tracker_config": {
+    "recovery_seconds": 2.0,
+    "max_speed": 30.0,
+    "max_accel": 100.0,
+    "max_radius": 14.0,
+    "jitter": 2.0,
+    "mahalanobis_limit": 9.21,
+    "size_ratio": 1.8,
+    "ambiguity_margin": 0.15,
+    "min_hits": 2,
+    "recovery_hits": 2,
+    "edge_margin": 5.0,
+    "low_conf": 0.18,
+    "max_rois": 6
+  },
+  "device": "auto",
+  "note": "Host receipt/replay timestamps; not exposure synchronization. Heat/pD are diagnostics, not ground truth."
+}
