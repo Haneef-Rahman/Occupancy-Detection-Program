@@ -40,9 +40,9 @@ class Dashboard:
         outline='#ededed' if active else '#f2f2f2' if primary else '#444444' if hover else BORDER
         self.rounded(x,y,w,h,9,fill,outline)
         self.text(label,x+11,y+(h-16)//2,13,'#111111' if primary else TEXT,primary)
-        shortcut='SPACE' if key==' ' else key.upper();kw=max(20,self.font(9).measure(shortcut)+10)
-        self.rounded(x+w-kw-7,y+7,kw,h-14,4,'#c9c9c9' if primary else '#303030','')
-        self.text(shortcut,x+w-kw-2,y+11,9,'#222222' if primary else '#dddddd')
+        shortcut='' if key.startswith('@') else 'SPACE' if key==' ' else key.upper();kw=max(20,self.font(9).measure(shortcut)+10)
+        if shortcut:self.rounded(x+w-kw-7,y+7,kw,h-14,4,'#c9c9c9' if primary else '#303030','')
+        if shortcut:self.text(shortcut,x+w-kw-2,y+11,9,'#222222' if primary else '#dddddd')
         u.buttons[key]=(x,y,x+w,y+h)
 
     def slider(self,name,label,y,right,rw,keys):
@@ -72,12 +72,16 @@ class Dashboard:
         self.text('Estimate',lx+26,y+13,11,'#dddddd')
         c.create_line(lx+116,y+20,lx+134,y+20,fill='#888888',dash=(5,4),width=2)
         self.text('Observed',lx+142,y+13,11,'#bbbbbb')
-        left=x+47;right=x+w-18;top=y+66;bottom=y+h-42
+        active=u.tab=='simulator' and row.get('heat_active',False) and row['mode']=='faster'
+        if active:
+            for i,(field,label) in enumerate([('detected','Detected'),('raw_heat','rFₕ'),('heat','Fₕ')]):
+                self.text(f'{label} {row[field]:.1f}',x+16+i*150,y+53,11,('#bbbbbb','#777777','#ffffff')[i])
+        left=x+47;right=x+w-18;top=y+(80 if active else 66);bottom=y+h-42
         self.chart_bounds=(left,top,right,bottom);self.chart_points=[]
-        samples=u.state.get('history',[])
-        maximum=max([2]+[max(s['estimate'],s['observed']) for s in samples]);step=max(1,math.ceil(maximum/3));maximum=step*3
+        samples=(u.state.get('overview') or u.state.get('history',[])) if u.axis_mode=='compressed' else u.state.get('history',[])
+        maximum=max([2]+[max(s['estimate'],s['observed'],*[s.get(k) or 0 for k in ('detected','raw_heat','heat')] if active else [0]) for s in samples]);step=max(1,math.ceil(maximum/3));maximum=step*3
         if samples:
-            t0=samples[0]['t'];span=samples[-1]['t']-t0
+            t0=0. if u.axis_mode=='compressed' else samples[0]['t'];span=samples[-1]['t']-t0
             def px(t):return left+(t-t0)/span*(right-left) if span else right
             def py(n):return bottom-n/maximum*(bottom-top)
             # Thin vector strips reproduce the reference's white-to-black area.
@@ -99,6 +103,16 @@ class Dashboard:
                 if len(points)>1:c.create_line(*[v for p in points for v in p],fill=color,width=1,dash=dash)
                 else:
                     xx,yy=points[0];c.create_oval(xx-2,yy-2,xx+2,yy+2,fill=color,outline='')
+            if active:
+                for field,color,dash in [('detected','#bbbbbb',(2,4)),('raw_heat','#777777',(7,3)),('heat','#ffffff',None)]:
+                    segment=[]
+                    def flush():
+                        if len(segment)>1:c.create_line(*[v for pt in segment for v in pt],fill=color,width=2 if field=='heat' else 1,dash=dash)
+                    for sample in samples:
+                        value=sample.get(field) if sample.get('heat_active') else None
+                        if value is None:flush();segment=[]
+                        else:segment.append((px(sample['t']),py(value)))
+                    flush()
             for i in (range(4) if span else [3]):
                 xx=left+(right-left)*i/3;tt=t0+span*i/3;label=f'{tt:.1f}s' if span<10 else f'{tt:.0f}s'
                 self.text(label,xx-min(24,self.font(10).measure(label)/2),bottom+7,10,MUTED)
@@ -107,7 +121,7 @@ class Dashboard:
             yy=bottom-(bottom-top)*i/3
             c.create_line(left,yy,right,yy,fill='#303030',dash=(2,5))
             self.text(i*step,left-33,yy-6,10,MUTED)
-        self.text('Last 120 frames  ·  Estimate: Precise legacy / Faster observed',x+16,y+h-17,10,'#777777')
+        self.text(('Compressed overview · decimated' if u.axis_mode=='compressed' else 'Moving window · last 120 frames')+'  ·  '+('Fₕ diagnostic blend' if active else 'Estimate: Precise legacy / Faster observed'),x+16,y+h-17,10,'#777777')
 
     def hover_chart(self,pointer):
         c=self.c;c.delete('hover');self.ui.chart_hover=None
@@ -123,6 +137,10 @@ class Dashboard:
         self.text(f'{s["t"]:.2f}s · frame {s["frame"]}',tx+10,ty+9,12,bold=True,tags='hover')
         self.text(f'Estimate {s["estimate"]}   Observed {s["observed"]}',tx+10,ty+32,11,'#dddddd',tags='hover')
         self.text(s['mode'].capitalize()+' K',tx+10,ty+56,11,MUTED,tags='hover')
+        if self.ui.row and self.ui.row.get('heat_active') and s.get('heat_active'):
+            self.rounded(tx,ty+82,180,58,8,'#1c1c1c','#444444',tags='hover')
+            self.text(f'Detected {s["detected"]:.1f} · rFₕ {s["raw_heat"]:.1f}',tx+10,ty+90,11,tags='hover')
+            self.text(f'Fₕ {s["heat"]:.1f}',tx+10,ty+112,11,bold=True,tags='hover')
 
     def thermal(self,data,row,bounds):
         from PIL import Image,ImageTk,ImageDraw
@@ -162,10 +180,13 @@ class Dashboard:
         c=self.c;u=self.ui;W=max(1120,c.winfo_width());H=max(840,c.winfo_height())
         c.delete('all');c.create_rectangle(0,0,W,H,fill=BG,outline='');u.buttons={};u.sliders={};self.chart_bounds=None;self.chart_points=[]
         row=u.row or dict(observed=[],unresolved=0,processing_ms=0,mode=u.mode if u.mode!='auto' else 'precise',frame=0,estimate=0)
-        self.rounded(24,20,38,38,12,'#e5e5e5','');self.text('F',36,26,23,BG,True)
-        self.text('FLUXNET',75,21,19,bold=True);self.text('Occupancy / Thermal workspace',75,46,12,MUTED)
+        self.button('Launcher','@launcher',24,16,112,active=u.tab=='launcher')
+        self.button('Simulator','@simulator',146,16,112,active=u.tab=='simulator')
+        from pathlib import Path
+        self.text(str(Path(__file__).resolve().parent),24,55,11,MUTED)
         self.button('History','o',W-494,24,100,active=u.history_visible)
-        self.badge('EXPERIMENTAL',W-382,28);self.badge('PAUSED' if u.paused else 'LIVE' if u.live else 'REPLAY',W-251,28)
+        self.button('Time: '+u.axis_mode,'@axis',W-382,24,140)
+        if u.tab=='simulator':self.button('Heat settings','@heat',W-232,24,104)
         self.button('Quit','q',W-122,24,98);c.create_line(24,76,W-24,76,fill=BORDER)
         left=24;lw=W-408;right=W-360;rw=336
         if u.history_visible:self.history(row,(left,92,lw,192));thermal_top=298
@@ -175,17 +196,39 @@ class Dashboard:
                 x=left+i*(mw+12);self.rounded(x,92,mw,82);self.text(label,x+16,104,12,MUTED);self.text(value,x+16,122,25,bold=True);self.text(hint,x+16,153,10,MUTED)
             thermal_top=188
         bottom=H-106;self.rounded(left,thermal_top,lw,bottom-thermal_top)
-        self.text('Thermal view',left+18,thermal_top+16,15,bold=True)
+        self.text('Thermal view' if u.tab=='launcher' else '',left+18,thermal_top+16,15,bold=True)
         label=VIEWS[u.contrast][0] if u.palette==0 else 'fixed 15–45°C'
-        self.text(f'160 × 120  /  '+['Inferno','Viridis','Grayscale'][u.palette]+' · '+label,left+18,thermal_top+39,11,MUTED)
+        self.text(f'160 × 120  /  '+['Inferno','Viridis','Grayscale'][u.palette]+' · '+label,left+18,thermal_top+(49 if u.tab=='simulator' else 39),11,MUTED)
         self.badge(row['mode'].capitalize()+' K' if u.row else 'Waiting',left+lw-116,thermal_top+15)
-        if u.data is not None:self.thermal(u.data,row,(left+16,thermal_top+62,lw-32,bottom-thermal_top-70))
-        else:self.text('Waiting for a thermal frame…',left+28,thermal_top+100,14,MUTED)
+        analytics_x=left+16;analytics_y=thermal_top+66
+        metrics=[('Detector',f'{row.get("base_ms",0):.1f} ms'),('Local recovery',f'{row.get("recovery_ms",0):.1f} ms'),('Tracking',f'{row.get("tracking_ms",0):.1f} ms'),('Mean score',f'{sum(t.get("conf",0) for t in row["observed"])/len(row["observed"]):.3f}' if row['observed'] else '—'),('Recovered now',str(sum(t.get('source')!='base' for t in row['observed'])))]
+        for i,(label,value) in enumerate(metrics):
+            yy=analytics_y+i*55;self.rounded(analytics_x,yy,142,48,9,'#181818','#282828')
+            self.text(label,analytics_x+10,yy+6,10,MUTED);self.text(value,analytics_x+10,yy+22,15,bold=True)
+        if u.data is not None:self.thermal(u.data,row,(left+174,thermal_top+62,lw-190,bottom-thermal_top-(96 if u.tab=='simulator' else 70)))
+        else:self.text('Open a capture and press Play' if u.tab=='simulator' else 'Waiting for a thermal frame…',left+190,thermal_top+100,14,MUTED)
         py=H-92;self.rounded(left,py,lw,58)
-        self.button('Resume' if u.paused else 'Pause',' ',left+12,py+12,140,primary=True)
+        u.seek_bounds=None
+        if u.tab=='simulator':
+            # Timeline sits at the base of the thermal card, away from controls.
+            x0=left+180;x1=left+lw-25;cy=bottom-16
+            u.seek_bounds=(x0,cy-9,x1,cy+9)
+            total=max(1,u.state.get('total',1));index=max(0,u.state.get('index',-1));fraction=index/max(1,total-1)
+            if u.seek_drag:fraction=max(0,min(1,(u.seek_position-x0)/(x1-x0)))
+            self.rounded(x0,cy-3,x1-x0,6,3,'#333333','');cx=x0+(x1-x0)*fraction
+            c.create_oval(cx-6,cy-6,cx+6,cy+6,fill=TEXT,outline=BG)
+            self.text(f'{index+1 if u.state.get("total") else 0} / {u.state.get("total",0)}',left+18,bottom-27,11,MUTED)
+
+        self.button(('Play' if u.paused else 'Pause') if u.tab=='simulator' else 'Resume' if u.paused else 'Pause',' ',left+12,py+12,140,primary=True)
         self.button('Step','n',left+162,py+12,87);self.button('Reset','x',left+259,py+12,98);self.button('Help','h',left+367,py+12,90,active=u.help_visible)
         self.text(f'FRAME {row["frame"]:06d}',left+lw-144,py+14,12,MUTED)
         self.text(row['mode'].capitalize()+' K'+(f' · estimate {row["estimate"]}' if row['mode']=='precise' else ''),left+lw-144,py+32,10,MUTED)
+        if u.tab=='simulator':
+            self.button('Open capture','@open',left+18,thermal_top+14,126)
+            self.button(f'{u.state.get("speed",1):g}× speed','@speed',left+154,thermal_top+14,100)
+            self.button('Back','@back',left+264,thermal_top+14,70)
+            self.button('Export','@export',left+344,thermal_top+14,78)
+            self.button('Options','@options',left+432,thermal_top+14,82)
         self.rounded(right,92,rw,212);self.text('Detection settings',right+16,108,15,bold=True)
         self.slider('conf','Detection confidence',132,right,rw,'[  decrease     ]  increase')
         self.slider('low_conf','Local search confidence',216,right,rw,";  decrease     '  increase   ·   inside search circles only")
