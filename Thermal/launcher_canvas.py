@@ -72,10 +72,10 @@ class Dashboard:
         self.text('Estimate',lx+26,y+13,11,'#dddddd')
         c.create_line(lx+116,y+20,lx+134,y+20,fill='#888888',dash=(5,4),width=2)
         self.text('Observed',lx+142,y+13,11,'#bbbbbb')
-        active=u.tab=='simulator' and row.get('heat_active',False) and row['mode']=='faster'
+        active=row.get('heat_active',False) and row['mode']=='faster'
         if active:
             for i,(field,label) in enumerate([('detected','Detected'),('raw_heat','rFₕ'),('heat','Fₕ')]):
-                self.text(f'{label} {row[field]:.1f}',x+16+i*150,y+53,11,('#bbbbbb','#777777','#ffffff')[i])
+                self.text(f'{label} {row[field]:g}',x+16+i*150,y+53,11,('#bbbbbb','#777777','#ffffff')[i])
         left=x+47;right=x+w-18;top=y+(80 if active else 66);bottom=y+h-42
         self.chart_bounds=(left,top,right,bottom);self.chart_points=[]
         samples=(u.state.get('overview') or u.state.get('history',[])) if u.axis_mode=='compressed' else u.state.get('history',[])
@@ -139,8 +139,8 @@ class Dashboard:
         self.text(s['mode'].capitalize()+' K',tx+10,ty+56,11,MUTED,tags='hover')
         if self.ui.row and self.ui.row.get('heat_active') and s.get('heat_active'):
             self.rounded(tx,ty+82,180,58,8,'#1c1c1c','#444444',tags='hover')
-            self.text(f'Detected {s["detected"]:.1f} · rFₕ {s["raw_heat"]:.1f}',tx+10,ty+90,11,tags='hover')
-            self.text(f'Fₕ {s["heat"]:.1f}',tx+10,ty+112,11,bold=True,tags='hover')
+            self.text(f'Detected {s["detected"]:g} · rFₕ {s["raw_heat"]:.1f}',tx+10,ty+90,11,tags='hover')
+            self.text(f'Fₕ {s["heat"]:g}',tx+10,ty+112,11,bold=True,tags='hover')
 
     def thermal(self,data,row,bounds):
         from PIL import Image,ImageTk,ImageDraw
@@ -186,7 +186,7 @@ class Dashboard:
         self.text(str(Path(__file__).resolve().parent),24,55,11,MUTED)
         self.button('History','o',W-494,24,100,active=u.history_visible)
         self.button('Time: '+u.axis_mode,'@axis',W-382,24,140)
-        if u.tab=='simulator':self.button('Heat settings','@heat',W-232,24,104)
+        self.button('Heat settings','@heat',W-232,24,104)
         self.button('Quit','q',W-122,24,98);c.create_line(24,76,W-24,76,fill=BORDER)
         left=24;lw=W-408;right=W-360;rw=336
         if u.history_visible:self.history(row,(left,92,lw,192));thermal_top=298

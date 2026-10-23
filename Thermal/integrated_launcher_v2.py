@@ -216,6 +216,9 @@ def run_capture(args, config, bridge=None):
     session = TrackingSession(detector, config, args.tracker)
     recorder = DatasetCapture(args.capture_root,weights,args.note)
     ui = LauncherControls(session,recorder,args.show_search,live=not bool(args.replay))
+    from heat_function import HeatFunction,HeatConfig
+    heat_function=HeatFunction();ui.heat_config=asdict(heat_function.config)
+    meta['heat_config']=ui.heat_config
     log = (out/'frames.jsonl').open('w')
     actions = (out/'controls.jsonl').open('w')
     started = time.perf_counter()
@@ -229,7 +232,12 @@ def run_capture(args, config, bridge=None):
                 while True:
                     try:request_id,action=bridge.commands.get_nowait()
                     except queue.Empty:break
-                    ui.command(action,data,row)
+                    if isinstance(action,dict) and action.get('action')=='heat_config':
+                        heat_function=HeatFunction(HeatConfig(**action['values']))
+                        ui.heat_config=asdict(heat_function.config);meta['heat_config']=ui.heat_config
+                        ui.events.append(dict(action='heat_config',frame=meta['frames'],values=ui.heat_config))
+                        ui.message='Heat settings updated; gate restarted'
+                    else:ui.command(action,data,row)
                     if action==ord('r'):record_index=0
                     changed=True
                 if changed:bridge.publish(ui=ui,ack=request_id)
@@ -241,6 +249,8 @@ def run_capture(args, config, bridge=None):
                 received=datetime.now().isoformat(timespec='milliseconds')
                 row=session.process(data,timestamp,origin)
                 meta['frames']+=1;row['frame']=meta['frames'];row['received_at']=received
+                if session.frame==1:heat_function.reset()
+                heat_function.update(data,row)
                 ui.observe(row)
                 if args.save_thermal:
                     stem=f"cap_{meta['frames']-1:06d}"

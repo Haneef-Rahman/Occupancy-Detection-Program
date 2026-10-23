@@ -26,6 +26,7 @@ class DesktopBridge:
                 values['history']=[dict(v) for v in ui.history.samples]
                 values['overview']=list(ui.history.overview)
                 values['message']=ui.message
+                if hasattr(ui,'heat_config'):values['heat_config']=dict(ui.heat_config)
             if row is not None:
                 values['row']=copy.deepcopy(row);values['data']=data.copy();values['data'].flags.writeable=False
                 self.state['frame_version']+=1
@@ -153,10 +154,11 @@ class NativeLauncher:
         import tkinter as tk
         from dataclasses import asdict
         from heat_function import HeatConfig
+        target_bridge=self.bridge
         current=self.state.get('heat_config') or asdict(HeatConfig())
         top=tk.Toplevel(self.root);top.title('Heat diagnostic settings');top.configure(bg='#111111');top.transient(self.root)
         variables={}
-        labels={'low_c':'Lower temperature °C (test band)','high_c':'Upper temperature °C (test band)','near_weight':'Near / bottom pixel weight','far_weight':'Far / top pixel weight','power':'Vertical gradient exponent','area':'Weighted pixels per occupancy unit','a':'a: raw heat weight','b':'b: Detected weight','warmup_s':'Continuous Faster K seconds','switch_window_s':'Recent switch window seconds','max_precise_entries':'Maximum Precise K entries'}
+        labels={'low_c':'Lower temperature °C (test band)','high_c':'Upper temperature °C (test band)','near_weight':'Near / bottom pixel weight','far_weight':'Far / top pixel weight','power':'Vertical gradient exponent','area':'Weighted pixels per occupancy unit','a':'a: raw heat weight','b':'b: detection baseline weight','warmup_s':'Continuous Faster K seconds','switch_window_s':'Recent switch window seconds','max_precise_entries':'Maximum Precise K entries'}
         for i,(key,label) in enumerate(labels.items()):
             tk.Label(top,text=label,bg='#111111',fg='#eeeeee').grid(row=i,column=0,padx=14,pady=3,sticky='w')
             variables[key]=tk.DoubleVar(top,value=current[key])
@@ -168,13 +170,13 @@ class NativeLauncher:
             if syncing[0]:return
             syncing[0]=True;variables[target].set(round(1-variables[source].get(),2));syncing[0]=False
         variables['a'].trace_add('write',lambda *_:blend('a','b'));variables['b'].trace_add('write',lambda *_:blend('b','a'))
-        message=tk.StringVar(top,value='Test band only. Detected is an overlapping sum, not a unique-person count.')
+        message=tk.StringVar(top,value='Test band only. Fₕ is floored; Detected = Fₕ + raw. Blend uses the original detection baseline.')
         tk.Label(top,textvariable=message,bg='#111111',fg='#bbbbbb',wraplength=510).grid(row=11,column=0,columnspan=2,pady=8)
         def apply():
             try:
                 values={k:v.get() for k,v in variables.items()};values['max_precise_entries']=int(values['max_precise_entries'])
                 config=HeatConfig(**values)
-                self.bridge.sim.submit(dict(action='heat_config',values=asdict(config)));top.destroy()
+                target_bridge.submit(dict(action='heat_config',values=asdict(config)));top.destroy()
             except Exception as e:message.set(str(e))
         tk.Button(top,text='Apply for subsequent frames',command=apply,bg='#eeeeee',fg='#111111').grid(row=12,column=0,columnspan=2,pady=10)
 
@@ -292,7 +294,8 @@ class SimulatorBridge:
         self.stop=threading.Event();self.request_id=0
     def submit(self,command):
         self.request_id+=1
-        if isinstance(command,int) and chr(command) in ' nx':
+        if isinstance(command,dict) and command.get('action')=='heat_config':cmd=command
+        elif isinstance(command,int) and chr(command) in ' nx':
             key=chr(command);action=('pause' if self.sim.snapshot()['playing'] else 'play') if key==' ' else 'step' if key=='n' else 'restart'
             cmd=dict(action=action)
         else:cmd=dict(action='control',command=command)
