@@ -1,0 +1,1895 @@
+{
+  "reviewed": false,
+  "weights": "D:/fluxnet/automation/yoloe-26x-seg.pt",
+  "model_names": {
+    "0": "human head and shoulders"
+  },
+  "mode": "yoloe",
+  "prompt": "human head and shoulders",
+  "conf": 0.25,
+  "imgsz": 1280,
+  "morph": {
+    "file": "morph.json",
+    "sha256": "381ec0fd088cc6e29b019c9dd7e30a2f637c3832519644ca9319217d0f8cb653",
+    "alignment_sha256": "a0d0ca4dbc3b11b7914c76e85a83780fe8503b37425620a8ea078d9c3052857d",
+    "coverage_percent": 67.47916666666667,
+    "strength": 1.0,
+    "outside_policy": "extrapolate",
+    "fit_points": 69,
+    "units": "native thermal pixels",
+    "application": "uniform translation at provisional box centre; final clipping only"
+  },
+  "alignment": {
+    "state": {
+      "x": 698,
+      "y": 544,
+      "scale": 8.47,
+      "angle": -0.5,
+      "opacity": 0.6,
+      "left": 26,
+      "right": 231,
+      "top": 43,
+      "bottom": 157,
+      "flipX": false,
+      "flipY": false
+    },
+    "history": [
+      {
+        "at": "2026-10-21T08:18:01.630Z",
+        "action": "drag IR",
+        "state": {
+          "x": 718,
+          "y": 602,
+          "scale": 8.41,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:07.720Z",
+        "action": "drag IR",
+        "state": {
+          "x": 534,
+          "y": 446,
+          "scale": 8.41,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:12.845Z",
+        "action": "drag IR",
+        "state": {
+          "x": 706,
+          "y": 559,
+          "scale": 8.41,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:18.346Z",
+        "action": "angle",
+        "state": {
+          "x": 706,
+          "y": 559,
+          "scale": 8.41,
+          "angle": -3.7,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:21.462Z",
+        "action": "angle",
+        "state": {
+          "x": 706,
+          "y": 559,
+          "scale": 8.41,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:24.246Z",
+        "action": "scale",
+        "state": {
+          "x": 706,
+          "y": 559,
+          "scale": 10.06,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:37.204Z",
+        "action": "drag IR",
+        "state": {
+          "x": 842,
+          "y": 527,
+          "scale": 10.06,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:41.278Z",
+        "action": "scale",
+        "state": {
+          "x": 842,
+          "y": 527,
+          "scale": 9.51,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:46.966Z",
+        "action": "drag IR",
+        "state": {
+          "x": 813,
+          "y": 551,
+          "scale": 9.51,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:51.624Z",
+        "action": "scale",
+        "state": {
+          "x": 813,
+          "y": 551,
+          "scale": 9.22,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:18:57.482Z",
+        "action": "drag IR",
+        "state": {
+          "x": 781,
+          "y": 566,
+          "scale": 9.22,
+          "angle": 0,
+          "opacity": 0.34,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:04.982Z",
+        "action": "opacity",
+        "state": {
+          "x": 781,
+          "y": 566,
+          "scale": 9.22,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:17.674Z",
+        "action": "scale",
+        "state": {
+          "x": 781,
+          "y": 566,
+          "scale": 8.79,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:20.033Z",
+        "action": "drag IR",
+        "state": {
+          "x": 771,
+          "y": 575,
+          "scale": 8.79,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:25.965Z",
+        "action": "drag IR",
+        "state": {
+          "x": 682,
+          "y": 555,
+          "scale": 8.79,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:32.824Z",
+        "action": "scale",
+        "state": {
+          "x": 682,
+          "y": 555,
+          "scale": 9.45,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:37.115Z",
+        "action": "drag IR",
+        "state": {
+          "x": 670,
+          "y": 584,
+          "scale": 9.45,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:44.896Z",
+        "action": "drag IR",
+        "state": {
+          "x": 652,
+          "y": 584,
+          "scale": 9.45,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:50.754Z",
+        "action": "scale",
+        "state": {
+          "x": 652,
+          "y": 584,
+          "scale": 9.02,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:19:56.032Z",
+        "action": "drag IR",
+        "state": {
+          "x": 674,
+          "y": 576,
+          "scale": 9.02,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:20:00.115Z",
+        "action": "scale",
+        "state": {
+          "x": 674,
+          "y": 576,
+          "scale": 8.28,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:20:06.554Z",
+        "action": "drag IR",
+        "state": {
+          "x": 698,
+          "y": 538,
+          "scale": 8.28,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:20:09.157Z",
+        "action": "drag IR",
+        "state": {
+          "x": 698,
+          "y": 538,
+          "scale": 8.28,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:20:15.139Z",
+        "action": "scale",
+        "state": {
+          "x": 698,
+          "y": 538,
+          "scale": 9.11,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:20:18.932Z",
+        "action": "drag IR",
+        "state": {
+          "x": 679,
+          "y": 574,
+          "scale": 9.11,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:02.943Z",
+        "action": "drag IR",
+        "state": {
+          "x": 698,
+          "y": 539,
+          "scale": 9.11,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:07.859Z",
+        "action": "scale",
+        "state": {
+          "x": 698,
+          "y": 539,
+          "scale": 8.71,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:11.090Z",
+        "action": "drag IR",
+        "state": {
+          "x": 715,
+          "y": 528,
+          "scale": 8.71,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:15.426Z",
+        "action": "scale",
+        "state": {
+          "x": 715,
+          "y": 528,
+          "scale": 8.53,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:20.134Z",
+        "action": "drag IR",
+        "state": {
+          "x": 702,
+          "y": 537,
+          "scale": 8.53,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:26.672Z",
+        "action": "scale",
+        "state": {
+          "x": 702,
+          "y": 537,
+          "scale": 8.35,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:32.159Z",
+        "action": "drag IR",
+        "state": {
+          "x": 699,
+          "y": 541,
+          "scale": 8.35,
+          "angle": 0,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:27:41.817Z",
+        "action": "angle",
+        "state": {
+          "x": 699,
+          "y": 541,
+          "scale": 8.35,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:00.125Z",
+        "action": "drag IR",
+        "state": {
+          "x": 699,
+          "y": 544,
+          "scale": 8.35,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:06.175Z",
+        "action": "x",
+        "state": {
+          "x": 708,
+          "y": 544,
+          "scale": 8.35,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:14.850Z",
+        "action": "x",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.35,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:20.017Z",
+        "action": "scale",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.47,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 35,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:27.216Z",
+        "action": "left",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.47,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 64,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:40.984Z",
+        "action": "left",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.47,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 26,
+          "right": 221,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:45.008Z",
+        "action": "right",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.47,
+          "angle": -0.6,
+          "opacity": 0.6,
+          "left": 26,
+          "right": 231,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:53.358Z",
+        "action": "angle",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.47,
+          "angle": -0.5,
+          "opacity": 0.6,
+          "left": 26,
+          "right": 231,
+          "top": 53,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:28:59.449Z",
+        "action": "top",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.47,
+          "angle": -0.5,
+          "opacity": 0.6,
+          "left": 26,
+          "right": 231,
+          "top": 43,
+          "bottom": 140,
+          "flipX": false,
+          "flipY": false
+        }
+      },
+      {
+        "at": "2026-10-21T08:29:07.283Z",
+        "action": "bottom",
+        "state": {
+          "x": 698,
+          "y": 544,
+          "scale": 8.47,
+          "angle": -0.5,
+          "opacity": 0.6,
+          "left": 26,
+          "right": 231,
+          "top": 43,
+          "bottom": 157,
+          "flipX": false,
+          "flipY": false
+        }
+      }
+    ],
+    "coordinate_system": "RGB 1600x1200; IR native 160x120; translate centre, rotate clockwise, scale, mirror; crop in RGB coordinates",
+    "saved_utc": "20261021T082917229576Z",
+    "source_session": "/Users/haneefrahman2650/Claude/Projects/Occupancy Detection Project/experiments/esp32_flash_test/post-focus-check-20261021-02",
+    "mount": "User-reported printed CAD mount on tripod, 21 October 2026",
+    "validated": false,
+    "note": "Manual 2D fit. Depth-dependent alignment and exposure timing remain unvalidated.",
+    "preset_id": "mounted-postfocus-20261021",
+    "workflow_approved": true,
+    "approval_note": "User completed manual realignment and requested first Faster captures on 21 October 2026. Accuracy and exposure synchronization remain unvalidated.",
+    "rgb_size": [
+      1600,
+      1200
+    ],
+    "thermal_size": [
+      160,
+      120
+    ]
+  },
+  "alignment_sha256": "a0d0ca4dbc3b11b7914c76e85a83780fe8503b37425620a8ea078d9c3052857d",
+  "inference_coordinates": "saved RGB crop; predictions restored to original RGB coordinates before IR transfer",
+  "timing_validated": false,
+  "integration_test_only": false,
+  "frames": [
+    {
+      "stem": "cap_000000",
+      "proposals": [],
+      "wall_seconds": 0.9973794000106864,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 27.31490001315251,
+        "inference": 74.95030004065484,
+        "postprocess": 0.6709999870508909
+      }
+    },
+    {
+      "stem": "cap_000001",
+      "proposals": [],
+      "wall_seconds": 0.08015090000117198,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.074800002854317,
+        "inference": 75.10960003128275,
+        "postprocess": 0.2598999999463558
+      }
+    },
+    {
+      "stem": "cap_000002",
+      "proposals": [],
+      "wall_seconds": 0.07932889997027814,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6557000130414963,
+        "inference": 74.729899992235,
+        "postprocess": 0.29579998226836324
+      }
+    },
+    {
+      "stem": "cap_000003",
+      "proposals": [],
+      "wall_seconds": 0.07886680000228807,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.5673999809660017,
+        "inference": 74.48519999161363,
+        "postprocess": 0.23380003403872252
+      }
+    },
+    {
+      "stem": "cap_000004",
+      "proposals": [],
+      "wall_seconds": 0.0795259999576956,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.200200026389211,
+        "inference": 74.50069999322295,
+        "postprocess": 0.2487000310793519
+      }
+    },
+    {
+      "stem": "cap_000005",
+      "proposals": [],
+      "wall_seconds": 0.07905659999232739,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7761999992653728,
+        "inference": 74.44729999406263,
+        "postprocess": 0.25129999266937375
+      }
+    },
+    {
+      "stem": "cap_000006",
+      "proposals": [],
+      "wall_seconds": 0.07923910004319623,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7882999749854207,
+        "inference": 74.48299997486174,
+        "postprocess": 0.3087999648414552
+      }
+    },
+    {
+      "stem": "cap_000007",
+      "proposals": [],
+      "wall_seconds": 0.07889659999636933,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.621899988502264,
+        "inference": 74.44510003551841,
+        "postprocess": 0.23370003327727318
+      }
+    },
+    {
+      "stem": "cap_000008",
+      "proposals": [],
+      "wall_seconds": 0.07889890001388267,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.568999993149191,
+        "inference": 74.51090001268312,
+        "postprocess": 0.24750002194195986
+      }
+    },
+    {
+      "stem": "cap_000009",
+      "proposals": [],
+      "wall_seconds": 0.0790996000287123,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.68780002463609,
+        "inference": 74.51960002072155,
+        "postprocess": 0.28229999588802457
+      }
+    },
+    {
+      "stem": "cap_000010",
+      "proposals": [],
+      "wall_seconds": 0.07938469998771325,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.9003000129014254,
+        "inference": 74.544099974446,
+        "postprocess": 0.2677000011317432
+      }
+    },
+    {
+      "stem": "cap_000011",
+      "proposals": [],
+      "wall_seconds": 0.08013740001479164,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.5649999626912177,
+        "inference": 75.70190000114962,
+        "postprocess": 0.2679999452084303
+      }
+    },
+    {
+      "stem": "cap_000012",
+      "proposals": [],
+      "wall_seconds": 0.07923099998151883,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7991999997757375,
+        "inference": 74.31629998609424,
+        "postprocess": 0.505700008943677
+      }
+    },
+    {
+      "stem": "cap_000013",
+      "proposals": [],
+      "wall_seconds": 0.08016310003586113,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7267999723553658,
+        "inference": 75.48769999993965,
+        "postprocess": 0.3127999952994287
+      }
+    },
+    {
+      "stem": "cap_000014",
+      "proposals": [],
+      "wall_seconds": 0.08004480000818148,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.94550000783056,
+        "inference": 75.1085999654606,
+        "postprocess": 0.30909996712580323
+      }
+    },
+    {
+      "stem": "cap_000015",
+      "proposals": [],
+      "wall_seconds": 0.08070009999210015,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.104899999219924,
+        "inference": 75.65299997804686,
+        "postprocess": 0.31860003946349025
+      }
+    },
+    {
+      "stem": "cap_000016",
+      "proposals": [],
+      "wall_seconds": 0.07895210001152009,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7700000102631748,
+        "inference": 74.33229999151081,
+        "postprocess": 0.26920001255348325
+      }
+    },
+    {
+      "stem": "cap_000017",
+      "proposals": [],
+      "wall_seconds": 0.0790310999727808,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7831999943591654,
+        "inference": 74.34539997484535,
+        "postprocess": 0.304899993352592
+      }
+    },
+    {
+      "stem": "cap_000018",
+      "proposals": [],
+      "wall_seconds": 0.07904009998310357,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.684600000269711,
+        "inference": 74.44420002866536,
+        "postprocess": 0.3185000387020409
+      }
+    },
+    {
+      "stem": "cap_000019",
+      "proposals": [],
+      "wall_seconds": 0.07948620000388473,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.952600003685802,
+        "inference": 74.51730000320822,
+        "postprocess": 0.3831000067293644
+      }
+    },
+    {
+      "stem": "cap_000020",
+      "proposals": [],
+      "wall_seconds": 0.07940340001368895,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.146399965975434,
+        "inference": 74.35599999735132,
+        "postprocess": 0.29550003819167614
+      }
+    },
+    {
+      "stem": "cap_000021",
+      "proposals": [],
+      "wall_seconds": 0.07895799999823794,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8801999762654305,
+        "inference": 74.26480000140145,
+        "postprocess": 0.23609999334439635
+      }
+    },
+    {
+      "stem": "cap_000022",
+      "proposals": [],
+      "wall_seconds": 0.07933370000682771,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.146300023421645,
+        "inference": 74.36590001452714,
+        "postprocess": 0.2342999796383083
+      }
+    },
+    {
+      "stem": "cap_000023",
+      "proposals": [],
+      "wall_seconds": 0.07934469997417182,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.857299976516515,
+        "inference": 74.5135000324808,
+        "postprocess": 0.3964999923482537
+      }
+    },
+    {
+      "stem": "cap_000024",
+      "proposals": [],
+      "wall_seconds": 0.07936109998263419,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.0154000162146986,
+        "inference": 74.41160001326352,
+        "postprocess": 0.2760999486781657
+      }
+    },
+    {
+      "stem": "cap_000025",
+      "proposals": [],
+      "wall_seconds": 0.07920320000266656,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.902000025846064,
+        "inference": 74.36649996088818,
+        "postprocess": 0.334800046402961
+      }
+    },
+    {
+      "stem": "cap_000026",
+      "proposals": [],
+      "wall_seconds": 0.0790119000012055,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6780000082217157,
+        "inference": 74.39209998119622,
+        "postprocess": 0.367600005120039
+      }
+    },
+    {
+      "stem": "cap_000027",
+      "proposals": [],
+      "wall_seconds": 0.07881939999060705,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6736000329256058,
+        "inference": 74.30570002179593,
+        "postprocess": 0.3233000170439482
+      }
+    },
+    {
+      "stem": "cap_000028",
+      "proposals": [],
+      "wall_seconds": 0.07932160003110766,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8835000013932586,
+        "inference": 74.3773999856785,
+        "postprocess": 0.4484999808482826
+      }
+    },
+    {
+      "stem": "cap_000029",
+      "proposals": [],
+      "wall_seconds": 0.0804525000276044,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 5.099400004837662,
+        "inference": 74.4700999930501,
+        "postprocess": 0.31780003337189555
+      }
+    },
+    {
+      "stem": "cap_000030",
+      "proposals": [],
+      "wall_seconds": 0.07905190001474693,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8545000134035945,
+        "inference": 74.41250002011657,
+        "postprocess": 0.255199964158237
+      }
+    },
+    {
+      "stem": "cap_000031",
+      "proposals": [],
+      "wall_seconds": 0.07944800000404939,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8137000519782305,
+        "inference": 74.60389996413141,
+        "postprocess": 0.4528999561443925
+      }
+    },
+    {
+      "stem": "cap_000032",
+      "proposals": [],
+      "wall_seconds": 0.07967809995170683,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6421999684534967,
+        "inference": 74.9669999931939,
+        "postprocess": 0.5303000216372311
+      }
+    },
+    {
+      "stem": "cap_000033",
+      "proposals": [],
+      "wall_seconds": 0.0792537999805063,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7897000438533723,
+        "inference": 74.46740003069863,
+        "postprocess": 0.44350000098347664
+      }
+    },
+    {
+      "stem": "cap_000034",
+      "proposals": [],
+      "wall_seconds": 0.07909150002524257,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.757899976335466,
+        "inference": 74.5185999548994,
+        "postprocess": 0.2484000287950039
+      }
+    },
+    {
+      "stem": "cap_000035",
+      "proposals": [],
+      "wall_seconds": 0.0789066000143066,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6433999775908887,
+        "inference": 74.44940001005307,
+        "postprocess": 0.2864999696612358
+      }
+    },
+    {
+      "stem": "cap_000036",
+      "proposals": [],
+      "wall_seconds": 0.07960990001447499,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.88329999987036,
+        "inference": 74.95809998363256,
+        "postprocess": 0.2440999960526824
+      }
+    },
+    {
+      "stem": "cap_000037",
+      "proposals": [],
+      "wall_seconds": 0.08012519998010248,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6799999652430415,
+        "inference": 75.56559995282441,
+        "postprocess": 0.2969999914057553
+      }
+    },
+    {
+      "stem": "cap_000038",
+      "proposals": [],
+      "wall_seconds": 0.08035060000838712,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.9339999784715474,
+        "inference": 75.52809995831922,
+        "postprocess": 0.34849997609853745
+      }
+    },
+    {
+      "stem": "cap_000039",
+      "proposals": [],
+      "wall_seconds": 0.07986619998700917,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7592999869957566,
+        "inference": 75.23670000955462,
+        "postprocess": 0.2767000114545226
+      }
+    },
+    {
+      "stem": "cap_000040",
+      "proposals": [],
+      "wall_seconds": 0.0793097999994643,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7885000347159803,
+        "inference": 74.7313000028953,
+        "postprocess": 0.26220001745969057
+      }
+    },
+    {
+      "stem": "cap_000041",
+      "proposals": [],
+      "wall_seconds": 0.07920089998515323,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.000799963250756,
+        "inference": 74.36389999929816,
+        "postprocess": 0.30910002533346415
+      }
+    },
+    {
+      "stem": "cap_000042",
+      "proposals": [],
+      "wall_seconds": 0.07912150002084672,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.848200023639947,
+        "inference": 74.31480003288016,
+        "postprocess": 0.3225999535061419
+      }
+    },
+    {
+      "stem": "cap_000043",
+      "proposals": [],
+      "wall_seconds": 0.0791478999890387,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.866199986077845,
+        "inference": 74.34539997484535,
+        "postprocess": 0.2937999670393765
+      }
+    },
+    {
+      "stem": "cap_000044",
+      "proposals": [],
+      "wall_seconds": 0.07909899996593595,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.760899999178946,
+        "inference": 74.43570002214983,
+        "postprocess": 0.3282999969087541
+      }
+    },
+    {
+      "stem": "cap_000045",
+      "proposals": [],
+      "wall_seconds": 0.07928669999819249,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.971699974499643,
+        "inference": 74.47650004178286,
+        "postprocess": 0.2796999760903418
+      }
+    },
+    {
+      "stem": "cap_000046",
+      "proposals": [],
+      "wall_seconds": 0.07922210003016517,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.868800005875528,
+        "inference": 74.44469997426495,
+        "postprocess": 0.3421999863348901
+      }
+    },
+    {
+      "stem": "cap_000047",
+      "proposals": [],
+      "wall_seconds": 0.07921950001036748,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8852999568916857,
+        "inference": 74.54399997368455,
+        "postprocess": 0.25540002388879657
+      }
+    },
+    {
+      "stem": "cap_000048",
+      "proposals": [],
+      "wall_seconds": 0.07930519996443763,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8424000376835465,
+        "inference": 74.58820001920685,
+        "postprocess": 0.2823999966494739
+      }
+    },
+    {
+      "stem": "cap_000049",
+      "proposals": [],
+      "wall_seconds": 0.07969250000314787,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.100600024685264,
+        "inference": 74.62929998291656,
+        "postprocess": 0.388299988117069
+      }
+    },
+    {
+      "stem": "cap_000050",
+      "proposals": [],
+      "wall_seconds": 0.0798437999910675,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.783699998166412,
+        "inference": 75.03760000690818,
+        "postprocess": 0.4542000242508948
+      }
+    },
+    {
+      "stem": "cap_000051",
+      "proposals": [],
+      "wall_seconds": 0.08134049997897819,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.732600005809218,
+        "inference": 75.47099998919293,
+        "postprocess": 0.5265999934636056
+      }
+    },
+    {
+      "stem": "cap_000052",
+      "proposals": [],
+      "wall_seconds": 0.07988819997990504,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.841899975668639,
+        "inference": 75.14750002883375,
+        "postprocess": 0.32809999538585544
+      }
+    },
+    {
+      "stem": "cap_000053",
+      "proposals": [],
+      "wall_seconds": 0.08020699996268377,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6847000010311604,
+        "inference": 75.59569994919002,
+        "postprocess": 0.3703999682329595
+      }
+    },
+    {
+      "stem": "cap_000054",
+      "proposals": [],
+      "wall_seconds": 0.08002310001756996,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8228000048547983,
+        "inference": 75.27139998273924,
+        "postprocess": 0.3687000134959817
+      }
+    },
+    {
+      "stem": "cap_000055",
+      "proposals": [],
+      "wall_seconds": 0.07933390000835061,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7946999655105174,
+        "inference": 74.48539999313653,
+        "postprocess": 0.3218000056222081
+      }
+    },
+    {
+      "stem": "cap_000056",
+      "proposals": [],
+      "wall_seconds": 0.07928969996282831,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.05069999396801,
+        "inference": 74.42770001944155,
+        "postprocess": 0.2969999914057553
+      }
+    },
+    {
+      "stem": "cap_000057",
+      "proposals": [],
+      "wall_seconds": 0.07942830002866685,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8782000192441046,
+        "inference": 74.52080002985895,
+        "postprocess": 0.3684999537654221
+      }
+    },
+    {
+      "stem": "cap_000058",
+      "proposals": [],
+      "wall_seconds": 0.07909559999825433,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8536000065505505,
+        "inference": 74.39329999033362,
+        "postprocess": 0.27169997338205576
+      }
+    },
+    {
+      "stem": "cap_000059",
+      "proposals": [],
+      "wall_seconds": 0.07908080000197515,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.626000019721687,
+        "inference": 74.53029998578131,
+        "postprocess": 0.30749995494261384
+      }
+    },
+    {
+      "stem": "cap_000060",
+      "proposals": [],
+      "wall_seconds": 0.07957559998612851,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.179000039584935,
+        "inference": 74.55359998857602,
+        "postprocess": 0.24360005045309663
+      }
+    },
+    {
+      "stem": "cap_000061",
+      "proposals": [],
+      "wall_seconds": 0.07924569997703657,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.9571000379510224,
+        "inference": 74.40739998128265,
+        "postprocess": 0.32629998167976737
+      }
+    },
+    {
+      "stem": "cap_000062",
+      "proposals": [],
+      "wall_seconds": 0.07902919995831326,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.751200041733682,
+        "inference": 74.35369997983798,
+        "postprocess": 0.31269999453797936
+      }
+    },
+    {
+      "stem": "cap_000063",
+      "proposals": [],
+      "wall_seconds": 0.07903189997887239,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8146000006236136,
+        "inference": 74.4136999710463,
+        "postprocess": 0.24530000519007444
+      }
+    },
+    {
+      "stem": "cap_000064",
+      "proposals": [],
+      "wall_seconds": 0.07871099998010322,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.5773999989032745,
+        "inference": 74.36249998863786,
+        "postprocess": 0.26160001289099455
+      }
+    },
+    {
+      "stem": "cap_000065",
+      "proposals": [],
+      "wall_seconds": 0.07895659998757765,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7793999654240906,
+        "inference": 74.41999996080995,
+        "postprocess": 0.2367999986745417
+      }
+    },
+    {
+      "stem": "cap_000066",
+      "proposals": [],
+      "wall_seconds": 0.07906650000950322,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.9278999902307987,
+        "inference": 74.2780999862589,
+        "postprocess": 0.2631000243127346
+      }
+    },
+    {
+      "stem": "cap_000067",
+      "proposals": [],
+      "wall_seconds": 0.07931770000141114,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7681999965570867,
+        "inference": 74.80230001965538,
+        "postprocess": 0.23390003480017185
+      }
+    },
+    {
+      "stem": "cap_000068",
+      "proposals": [],
+      "wall_seconds": 0.07969789998605847,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.597100032493472,
+        "inference": 74.43070004228503,
+        "postprocess": 1.0982999810948968
+      }
+    },
+    {
+      "stem": "cap_000069",
+      "proposals": [],
+      "wall_seconds": 0.07939600001554936,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.046600020956248,
+        "inference": 74.49849997647107,
+        "postprocess": 0.23880001390352845
+      }
+    },
+    {
+      "stem": "cap_000070",
+      "proposals": [],
+      "wall_seconds": 0.07931050000479445,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.82539996644482,
+        "inference": 74.65669995872304,
+        "postprocess": 0.27189997490495443
+      }
+    },
+    {
+      "stem": "cap_000071",
+      "proposals": [],
+      "wall_seconds": 0.07882220001192763,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.630499995779246,
+        "inference": 74.43540001986548,
+        "postprocess": 0.24170003598555923
+      }
+    },
+    {
+      "stem": "cap_000072",
+      "proposals": [],
+      "wall_seconds": 0.07897729997057468,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6208999808877707,
+        "inference": 74.5378999854438,
+        "postprocess": 0.26000000070780516
+      }
+    },
+    {
+      "stem": "cap_000073",
+      "proposals": [],
+      "wall_seconds": 0.07943459996022284,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7452999968081713,
+        "inference": 74.87790001323447,
+        "postprocess": 0.2739999908953905
+      }
+    },
+    {
+      "stem": "cap_000074",
+      "proposals": [],
+      "wall_seconds": 0.07921270001679659,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8485999684780836,
+        "inference": 74.57619998604059,
+        "postprocess": 0.25949999690055847
+      }
+    },
+    {
+      "stem": "cap_000075",
+      "proposals": [],
+      "wall_seconds": 0.07973040000069886,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7450999952852726,
+        "inference": 75.16210002359003,
+        "postprocess": 0.28629996813833714
+      }
+    },
+    {
+      "stem": "cap_000076",
+      "proposals": [],
+      "wall_seconds": 0.0799678000039421,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.784800006542355,
+        "inference": 75.23479999508709,
+        "postprocess": 0.3307999577373266
+      }
+    },
+    {
+      "stem": "cap_000077",
+      "proposals": [],
+      "wall_seconds": 0.07969250000314787,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7372999940998852,
+        "inference": 75.07429999532178,
+        "postprocess": 0.31649996526539326
+      }
+    },
+    {
+      "stem": "cap_000078",
+      "proposals": [],
+      "wall_seconds": 0.07966700004180893,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.639100003056228,
+        "inference": 75.16860001487657,
+        "postprocess": 0.2761000068858266
+      }
+    },
+    {
+      "stem": "cap_000079",
+      "proposals": [],
+      "wall_seconds": 0.07908950001001358,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7449999945238233,
+        "inference": 74.56869998713955,
+        "postprocess": 0.26840000646188855
+      }
+    },
+    {
+      "stem": "cap_000080",
+      "proposals": [],
+      "wall_seconds": 0.07861670001875609,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.618299961090088,
+        "inference": 74.26909997593611,
+        "postprocess": 0.23499998496845365
+      }
+    },
+    {
+      "stem": "cap_000081",
+      "proposals": [],
+      "wall_seconds": 0.07887600001413375,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6453999928198755,
+        "inference": 74.40039998618886,
+        "postprocess": 0.2595999976620078
+      }
+    },
+    {
+      "stem": "cap_000082",
+      "proposals": [],
+      "wall_seconds": 0.07892470003571361,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6151999956928194,
+        "inference": 74.46130004245788,
+        "postprocess": 0.3071000101044774
+      }
+    },
+    {
+      "stem": "cap_000083",
+      "proposals": [],
+      "wall_seconds": 0.07926890003727749,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.791099996306002,
+        "inference": 74.66939999721944,
+        "postprocess": 0.28680003015324473
+      }
+    },
+    {
+      "stem": "cap_000084",
+      "proposals": [],
+      "wall_seconds": 0.07865430001402274,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.5926999989897013,
+        "inference": 74.29150003008544,
+        "postprocess": 0.24959997972473502
+      }
+    },
+    {
+      "stem": "cap_000085",
+      "proposals": [],
+      "wall_seconds": 0.07876599999144673,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.5671000368893147,
+        "inference": 74.39049996901304,
+        "postprocess": 0.28279999969527125
+      }
+    },
+    {
+      "stem": "cap_000086",
+      "proposals": [],
+      "wall_seconds": 0.07873419998213649,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.530200046952814,
+        "inference": 74.43440001225099,
+        "postprocess": 0.25759998243302107
+      }
+    },
+    {
+      "stem": "cap_000087",
+      "proposals": [],
+      "wall_seconds": 0.07890379999298602,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7508999812416732,
+        "inference": 74.38440003897995,
+        "postprocess": 0.24010002380236983
+      }
+    },
+    {
+      "stem": "cap_000088",
+      "proposals": [],
+      "wall_seconds": 0.07927699998253956,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 4.008400021120906,
+        "inference": 74.40159999532625,
+        "postprocess": 0.31590001890435815
+      }
+    },
+    {
+      "stem": "cap_000089",
+      "proposals": [],
+      "wall_seconds": 0.0797570999711752,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7063999916426837,
+        "inference": 75.183900014963,
+        "postprocess": 0.29500003438442945
+      }
+    },
+    {
+      "stem": "cap_000090",
+      "proposals": [],
+      "wall_seconds": 0.08001119998516515,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.8918000063858926,
+        "inference": 75.29040001099929,
+        "postprocess": 0.2546999603509903
+      }
+    },
+    {
+      "stem": "cap_000091",
+      "proposals": [],
+      "wall_seconds": 0.08005529997171834,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.9159000152722,
+        "inference": 75.3506000037305,
+        "postprocess": 0.2642000326886773
+      }
+    },
+    {
+      "stem": "cap_000092",
+      "proposals": [],
+      "wall_seconds": 0.07920209999429062,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.9843000122345984,
+        "inference": 74.44469997426495,
+        "postprocess": 0.2479000249877572
+      }
+    },
+    {
+      "stem": "cap_000093",
+      "proposals": [],
+      "wall_seconds": 0.07906339998589829,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.805199987255037,
+        "inference": 74.40540002426133,
+        "postprocess": 0.25539996568113565
+      }
+    },
+    {
+      "stem": "cap_000094",
+      "proposals": [],
+      "wall_seconds": 0.07952199998544529,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.911700041498989,
+        "inference": 74.73809999646619,
+        "postprocess": 0.3225000109523535
+      }
+    },
+    {
+      "stem": "cap_000095",
+      "proposals": [],
+      "wall_seconds": 0.07907669997075573,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.752599994186312,
+        "inference": 74.44060000125319,
+        "postprocess": 0.30750001315027475
+      }
+    },
+    {
+      "stem": "cap_000096",
+      "proposals": [],
+      "wall_seconds": 0.07897790003335103,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.6582000320777297,
+        "inference": 74.52399999601766,
+        "postprocess": 0.2677000011317432
+      }
+    },
+    {
+      "stem": "cap_000097",
+      "proposals": [],
+      "wall_seconds": 0.07892549998359755,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7261000252328813,
+        "inference": 74.3905000272207,
+        "postprocess": 0.24989998200908303
+      }
+    },
+    {
+      "stem": "cap_000098",
+      "proposals": [],
+      "wall_seconds": 0.07913779997033998,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.747900016605854,
+        "inference": 74.49179998366162,
+        "postprocess": 0.3355999942868948
+      }
+    },
+    {
+      "stem": "cap_000099",
+      "proposals": [],
+      "wall_seconds": 0.0790856999810785,
+      "annotation_transfer_seconds": 0.0,
+      "model_speed_ms": {
+        "preprocess": 3.7594999885186553,
+        "inference": 74.5071999845095,
+        "postprocess": 0.2867999719455838
+      }
+    }
+  ],
+  "annotation_wall_seconds": 18.8883613999933,
+  "annotation_transfer_seconds": 0.0
+}

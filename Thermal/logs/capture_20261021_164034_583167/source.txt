@@ -1,0 +1,2 @@
+RGB-derived class-1 proposals; manual thermal review required.
+D:/fluxnet/automation/yoloe-26x-seg.pt
