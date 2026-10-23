@@ -1,0 +1,101 @@
+{
+  "capture": {
+    "folder": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/logs/capture_20260918_103822",
+    "frames": 1542,
+    "duration_s": 177.341,
+    "median_interval_s": 0.125,
+    "maximum_gap_s": 1.8360000000000127,
+    "timing": "Recorded manifest save times (not exact exposure times)",
+    "timing_metadata_sha256": "82ea758f16d8b656cf9e6b7b311302fcda6bad0fc113fa78c6284d96bcbcd8a0"
+  },
+  "config": {
+    "recovery_seconds": 2.0,
+    "max_speed": 30.0,
+    "max_accel": 100.0,
+    "max_radius": 14.0,
+    "jitter": 2.0,
+    "mahalanobis_limit": 9.21,
+    "size_ratio": 1.8,
+    "ambiguity_margin": 0.15,
+    "min_hits": 2,
+    "recovery_hits": 2,
+    "edge_margin": 5.0,
+    "low_conf": 0.18,
+    "max_rois": 6
+  },
+  "tracker": "auto",
+  "weights": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v5/best.pt",
+  "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
+  "started": "2026-10-23T09:53:14.773793+08:00",
+  "status": "restarted",
+  "source_unchanged": true,
+  "accuracy_measured": false,
+  "engine_files": {
+    "integrated_launcher_v2.py": "8c1105ab40b35cf520eac36bf6ba2f31f85423ea7326cf4dba7d7c0650830351",
+    "tracking_router.py": "64f5544f6fd154bd543845530520b7d4df04b6265056b24f7911770b80a237e7",
+    "faster_k.py": "124740d95c1a486452c42faf0bea324b6e84663c2b2203929213cb30fefa33bd",
+    "precise_k.py": "29a6e5fd535f07dca6856eeda0e52d8a7447d6dd1d6ce2a57a0c2f5cfe689829",
+    "crowd_detector.py": "db4a057619a1347be8b89975cd1f75fe517f32f2ce8cd186019cdde601fded95"
+  },
+  "normal_confidence": 0.374,
+  "control_events": [
+    {
+      "action": "slider/conf",
+      "frame": 739,
+      "conf": 0.279,
+      "search_conf": 0.18,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 767,
+      "conf": 0.248,
+      "search_conf": 0.18,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/low_conf",
+      "frame": 817,
+      "conf": 0.248,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    }
+  ],
+  "processed_frames": 845,
+  "modes": {
+    "precise": 774,
+    "faster": 71
+  },
+  "unique_observed_ids": 5,
+  "mode_switches": 6,
+  "interpretation": "Detection/tracking diagnostics only. Existing labels are not treated as identity/count ground truth.",
+  "observed_min": 0,
+  "observed_max": 2,
+  "observed_mean": 1.0887573964497042,
+  "maximum_unresolved": 1,
+  "timing_ms": {
+    "processing": {
+      "median": 48.863875010283664,
+      "p95": 57.76855860021896
+    },
+    "base_detector": {
+      "median": 48.4762080013752,
+      "p95": 54.639008216327056
+    },
+    "recovery_detector": {
+      "median": 0.0006250047590583563,
+      "p95": 0.0011586060281842927
+    },
+    "tracking": {
+      "median": 0.13079200289212167,
+      "p95": 0.25278419489040965
+    }
+  },
+  "timing_note": "Measured on this computer; includes first-frame warm-up; excludes playback waiting, rendering and log writes."
+}

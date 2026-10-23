@@ -1,0 +1,71 @@
+{
+  "capture": {
+    "folder": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/logs/capture_20260922_142331",
+    "frames": 4,
+    "duration_s": 14.925,
+    "median_interval_s": 4.567,
+    "maximum_gap_s": 6.615,
+    "timing": "Recorded manifest save times (not exact exposure times)",
+    "timing_metadata_sha256": "600654bc81657397c3d635046b2ea563b4366f8abd7d3bed5c9d93ffcdab1547"
+  },
+  "config": {
+    "recovery_seconds": 2.0,
+    "max_speed": 30.0,
+    "max_accel": 100.0,
+    "max_radius": 14.0,
+    "jitter": 2.0,
+    "mahalanobis_limit": 9.21,
+    "size_ratio": 1.8,
+    "ambiguity_margin": 0.15,
+    "min_hits": 2,
+    "recovery_hits": 2,
+    "edge_margin": 5.0,
+    "low_conf": 0.112,
+    "max_rois": 6
+  },
+  "tracker": "auto",
+  "weights": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v5/best.pt",
+  "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
+  "started": "2026-10-23T09:57:27.824938+08:00",
+  "status": "completed",
+  "source_unchanged": true,
+  "accuracy_measured": false,
+  "engine_files": {
+    "integrated_launcher_v2.py": "8c1105ab40b35cf520eac36bf6ba2f31f85423ea7326cf4dba7d7c0650830351",
+    "tracking_router.py": "64f5544f6fd154bd543845530520b7d4df04b6265056b24f7911770b80a237e7",
+    "faster_k.py": "124740d95c1a486452c42faf0bea324b6e84663c2b2203929213cb30fefa33bd",
+    "precise_k.py": "29a6e5fd535f07dca6856eeda0e52d8a7447d6dd1d6ce2a57a0c2f5cfe689829",
+    "crowd_detector.py": "db4a057619a1347be8b89975cd1f75fe517f32f2ce8cd186019cdde601fded95"
+  },
+  "normal_confidence": 0.248,
+  "processed_frames": 4,
+  "modes": {
+    "faster": 4
+  },
+  "unique_observed_ids": 0,
+  "mode_switches": 0,
+  "interpretation": "Detection/tracking diagnostics only. Existing labels are not treated as identity/count ground truth.",
+  "observed_min": 0,
+  "observed_max": 0,
+  "observed_mean": 0.0,
+  "maximum_unresolved": 0,
+  "timing_ms": {
+    "processing": {
+      "median": 54.77177099965047,
+      "p95": 60.10749380220659
+    },
+    "base_detector": {
+      "median": 54.35897900315467,
+      "p95": 59.794045507442206
+    },
+    "recovery_detector": {
+      "median": 0.0005414767656475306,
+      "p95": 0.00512318219989538
+    },
+    "tracking": {
+      "median": 0.33593802072573453,
+      "p95": 0.44438575569074595
+    }
+  },
+  "timing_note": "Measured on this computer; includes first-frame warm-up; excludes playback waiting, rendering and log writes."
+}

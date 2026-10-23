@@ -1,0 +1,487 @@
+{
+  "capture": {
+    "folder": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/logs/capture_20260921_101139",
+    "frames": 372,
+    "duration_s": 42.28,
+    "median_interval_s": 0.12400000000000055,
+    "maximum_gap_s": 0.1490000000000009,
+    "timing": "Recorded manifest save times (not exact exposure times)",
+    "timing_metadata_sha256": "5ff6f371b5a762b335c5a71ad5e5cad79471901ac14b956077c24617af57ac6c"
+  },
+  "config": {
+    "recovery_seconds": 2.0,
+    "max_speed": 30.0,
+    "max_accel": 100.0,
+    "max_radius": 14.0,
+    "jitter": 2.0,
+    "mahalanobis_limit": 9.21,
+    "size_ratio": 1.8,
+    "ambiguity_margin": 0.15,
+    "min_hits": 2,
+    "recovery_hits": 2,
+    "edge_margin": 5.0,
+    "low_conf": 0.112,
+    "max_rois": 6
+  },
+  "tracker": "auto",
+  "weights": "/Users/haneefrahman2650/Developer/Occupancy-Detection-Program/Thermal/models/v5/best.pt",
+  "weights_sha256": "6cfc98ccf80de43f99e76fb96d5bd64331ce65422261c1e4442ae905280fd152",
+  "started": "2026-10-23T09:59:30.257775+08:00",
+  "status": "completed",
+  "source_unchanged": true,
+  "accuracy_measured": false,
+  "engine_files": {
+    "integrated_launcher_v2.py": "8c1105ab40b35cf520eac36bf6ba2f31f85423ea7326cf4dba7d7c0650830351",
+    "tracking_router.py": "64f5544f6fd154bd543845530520b7d4df04b6265056b24f7911770b80a237e7",
+    "faster_k.py": "124740d95c1a486452c42faf0bea324b6e84663c2b2203929213cb30fefa33bd",
+    "precise_k.py": "29a6e5fd535f07dca6856eeda0e52d8a7447d6dd1d6ce2a57a0c2f5cfe689829",
+    "crowd_detector.py": "db4a057619a1347be8b89975cd1f75fe517f32f2ce8cd186019cdde601fded95"
+  },
+  "normal_confidence": 0.139,
+  "control_events": [
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.132,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.142,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.152,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.162,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.152,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.142,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.132,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.112,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/low_conf",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "c",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "c",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "c",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "c",
+      "frame": 258,
+      "conf": 0.122,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.068,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.585,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.813,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.902,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.966,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.48,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.17,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 258,
+      "conf": 0.068,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 259,
+      "conf": 0.497,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 259,
+      "conf": 0.99,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 260,
+      "conf": 0.66,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 261,
+      "conf": 0.871,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 262,
+      "conf": 0.068,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    },
+    {
+      "action": "slider/conf",
+      "frame": 262,
+      "conf": 0.068,
+      "search_conf": 0.058,
+      "policy": "auto",
+      "palette": 0,
+      "contrast": 0
+    }
+  ],
+  "processed_frames": 372,
+  "modes": {
+    "faster": 372
+  },
+  "unique_observed_ids": 139,
+  "mode_switches": 0,
+  "interpretation": "Detection/tracking diagnostics only. Existing labels are not treated as identity/count ground truth.",
+  "observed_min": 0,
+  "observed_max": 22,
+  "observed_mean": 13.46505376344086,
+  "maximum_unresolved": 22,
+  "timing_ms": {
+    "processing": {
+      "median": 308.5534790006932,
+      "p95": 363.52549374714727
+    },
+    "base_detector": {
+      "median": 57.988874992588535,
+      "p95": 65.85586235305527
+    },
+    "recovery_detector": {
+      "median": 246.47585449565668,
+      "p95": 297.23336629685946
+    },
+    "tracking": {
+      "median": 4.193500004475936,
+      "p95": 6.444271106738597
+    }
+  },
+  "timing_note": "Measured on this computer; includes first-frame warm-up; excludes playback waiting, rendering and log writes."
+}
