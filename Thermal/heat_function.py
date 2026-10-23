@@ -1,4 +1,4 @@
-"""Simulator-only thermal-area diagnostic. No detector/tracker feedback."""
+"""Shared thermal-area graph diagnostic. No detector/tracker feedback."""
 from dataclasses import dataclass,asdict
 from collections import deque
 import math
@@ -38,12 +38,17 @@ class HeatFunction:
         elif self.previous!='faster' or self.faster_since is None:self.faster_since=t
         active=mode=='faster' and t-self.faster_since>=c.warmup_s and len(self.entries)<=c.max_precise_entries
         self.previous=mode;self.previous_t=t
-        result=dict(heat_active=active,raw_heat=None,heat=None,detected=None,heat_band_pixels=None)
+        result=dict(heat_active=active,raw_heat=None,heat=None,detected=None,blend_detected=None,heat_band_pixels=None)
         if active:
             y=np.linspace(1.,0.,data.shape[0])[:,None]
             weights=c.near_weight+(c.far_weight-c.near_weight)*y**c.power
             mask=np.isfinite(data)&(data>=c.low_c)&(data<=c.high_c)
             raw=float(np.sum(mask*weights))/c.area
-            detected=len(row['base_detections'])+max(len(row['observed']),row['estimate'])
-            result.update(raw_heat=raw,detected=detected,heat=c.a*raw+c.b*detected,heat_band_pixels=int(mask.sum()))
+            raw_detections=len(row['base_detections'])
+            # Preserve the original blend input; the revised displayed Detected
+            # is an output and must not recursively feed back into this frame.
+            baseline=raw_detections+max(len(row['observed']),row['estimate'])
+            heat=math.floor(c.a*raw+c.b*baseline)
+            result.update(raw_heat=raw,blend_detected=baseline,detected=heat+raw_detections,
+                          heat=heat,heat_band_pixels=int(mask.sum()))
         row.update(result);return result
